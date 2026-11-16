@@ -22,7 +22,7 @@ class TextCleaner:
     _TAG = re.compile(r"<[^>]*>")
     _SPACE = re.compile(r"\s+")
     # Control characters and the marks that reorder text on screen.
-    _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩]")
+    _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
     _CVE = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
 
     @classmethod

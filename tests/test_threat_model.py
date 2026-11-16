@@ -100,7 +100,7 @@ def test_relevance_orders_affects_you_first() -> None:
 
 
 def test_text_direction_marks_are_removed() -> None:
-    assert TextCleaner.plain("safe‮gnp.exe") == "safegnp.exe"
+    assert TextCleaner.plain("safe\u202egnp.exe") == "safegnp.exe"
 
 
 def test_safe_url_host() -> None:
