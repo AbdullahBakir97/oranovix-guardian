@@ -74,8 +74,14 @@ class DigestBuilder:
         since: Optional[datetime],
         texts: DigestTexts = DigestTexts(),
     ) -> Digest:
-        """Digest of the items first seen after *since* (all of them when ``None``)."""
-        new = [item for item in items if since is None or item.first_seen > since]
+        """Digest of the items first seen after *since* (all of them when ``None``).
+
+        Background items are not news, unless they affect a project.
+        """
+        new = [
+            item for item in items
+            if item.counts_as_new and (since is None or item.first_seen > since)
+        ]
         new.sort(key=cls._order)
         affecting = [item for item in new if item.relevance is Relevance.AFFECTS_YOU]
         possible = [item for item in new if item.relevance is Relevance.POSSIBLE]

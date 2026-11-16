@@ -151,10 +151,16 @@ class StoredItem:
     read: bool = False
     relevance: Relevance = Relevance.GENERAL
     matches: Tuple[ProjectMatch, ...] = ()
+    background: bool = False        # old catalog entry: kept for matching, not news
 
     @property
     def id(self) -> str:
         return self.item.id
+
+    @property
+    def counts_as_new(self) -> bool:
+        """A background item is news only once it affects a project."""
+        return not self.background or self.relevance is Relevance.AFFECTS_YOU
 
 
 @dataclass(frozen=True)

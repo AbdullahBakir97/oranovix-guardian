@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from datetime import datetime, timedelta
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from core.alarm_center import Alarm, AlarmCenter
 
@@ -32,7 +32,8 @@ class RefreshReport:
 
     finished_at: datetime
     disabled: bool = False                  # the feed is switched off: nothing was requested
-    new_items: Tuple[FeedItem, ...] = ()
+    new_items: Tuple[FeedItem, ...] = ()    # without the background
+    background_items: int = 0               # old catalog entries stored for matching only
     failures: Tuple[str, ...] = ()          # "source: reason"
     sources_ok: int = 0
     alarms: Tuple[Alarm, ...] = field(default_factory=tuple)
@@ -45,6 +46,10 @@ class RefreshReport:
 
 class ThreatFeedService:
     """Owns the store and runs the refresh cycle."""
+
+    # A catalog entry older than this is not news when it first arrives. The
+    # first download of the CISA catalog brings well over a thousand of them.
+    BACKGROUND_AFTER_DAYS = 30
 
     def __init__(
         self,
@@ -110,16 +115,28 @@ class ThreatFeedService:
                 finally:
                     self._store.save_source(source.health, source.validators)
 
-            new_items = self._store.add(collected)
+            background = self._background_ids(collected)
+            added = self._store.add(collected, background)
             self._store.purge()
             alarms = self._match_and_alarm()
+            # An old entry that turned out to affect a project is news after all.
+            affecting = {s.id for s in self._store.items([Relevance.AFFECTS_YOU], limit=100000)}
+            quiet = background - affecting
             return RefreshReport(
                 finished_at=self._clock(),
-                new_items=tuple(new_items),
+                new_items=tuple(item for item in added if item.id not in quiet),
+                background_items=sum(1 for item in added if item.id in quiet),
                 failures=tuple(failures),
                 sources_ok=succeeded,
                 alarms=tuple(alarms),
             )
+
+    def _background_ids(self, items: Sequence[FeedItem]) -> Set[str]:
+        limit = self._clock() - timedelta(days=self.BACKGROUND_AFTER_DAYS)
+        return {
+            item.id for item in items
+            if item.is_known_exploited and item.published is not None and item.published < limit
+        }
 
     def rematch(self) -> List[Alarm]:
         """Match the cached items again, e.g. after a project was added. No network."""

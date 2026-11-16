@@ -81,6 +81,8 @@ class FeedRefreshMonitor(Monitor):
 class ThreatIntelHub:
     """Starts, stops and talks to the feed service and the uptime monitor."""
 
+    PAGE_SIZE = 200
+
     def __init__(
         self,
         dispatch: Dispatch,
@@ -162,9 +164,22 @@ class ThreatIntelHub:
             uptime_event=uptime_event,
         )
 
-    def items(self, for_you: bool) -> List[StoredItem]:
+    def items(self, for_you: bool, limit: int = PAGE_SIZE) -> List[StoredItem]:
+        """Items of a tab.
+
+        "For you" always holds every item that affects a project, whatever
+        its age, followed by at most *limit* guesses. "All" is the newest
+        *limit* items.
+        """
+        if not for_you:
+            return self._store.items(limit=limit, newest_first=True)
+        affecting = self._store.items([Relevance.AFFECTS_YOU], limit=100000)
+        return affecting + self._store.items([Relevance.POSSIBLE], limit=limit)
+
+    def item_count(self, for_you: bool) -> int:
+        """How many items the tab has in the store, shown or not."""
         relevances = [Relevance.AFFECTS_YOU, Relevance.POSSIBLE] if for_you else None
-        return self._store.items(relevances)
+        return self._store.count(relevances)
 
     def source_health(self) -> List[Tuple[SourceConfig, SourceHealth]]:
         return self._service.source_health()

@@ -4,6 +4,10 @@ Local store of feed items (``feed.db``).
 The Threat Feed page always reads from here, so it works offline and can
 say when the last successful update was. Items are kept once per id; an
 item that no feed has listed for 90 days is removed.
+
+Old catalog entries are stored as background items: they are matched
+like every other item, but are not counted as new or unread until one
+of them affects a project.
 """
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ import threading
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Collection, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from scanner_engine.base import Severity
 
@@ -118,7 +122,8 @@ class ThreatStore:
             last_seen TEXT NOT NULL,
             is_read INTEGER NOT NULL DEFAULT 0,
             relevance TEXT NOT NULL DEFAULT 'general',
-            matches TEXT NOT NULL DEFAULT '[]'
+            matches TEXT NOT NULL DEFAULT '[]',
+            background INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS items_relevance ON items (relevance, is_read);
         CREATE TABLE IF NOT EXISTS sources (
@@ -139,17 +144,26 @@ class ThreatStore:
     """
     _COLUMNS = (
         "id, source, title, url, published, summary, cve_ids, packages, "
-        "known_exploited, severity, first_seen, is_read, relevance, matches"
+        "known_exploited, severity, first_seen, is_read, relevance, matches, background"
     )
+    _NEWEST = "COALESCE(published, first_seen) DESC, id"
     _ORDER = (
-        "CASE relevance WHEN 'affects_you' THEN 0 WHEN 'possible' THEN 1 ELSE 2 END, "
-        "COALESCE(published, first_seen) DESC, id"
+        "CASE relevance WHEN 'affects_you' THEN 0 WHEN 'possible' THEN 1 ELSE 2 END, " + _NEWEST
     )
+    # What counts as new or unread: not the background, unless it affects a project.
+    _COUNTED = "(background = 0 OR relevance = 'affects_you')"
 
     def __init__(self, database: Optional[FeedDatabase] = None, clock: Clock = utc_now) -> None:
         self._db = database or FeedDatabase()
         self._clock = clock
         self._db.script(self._SCHEMA)
+        self._upgrade()
+
+    def _upgrade(self) -> None:
+        """Add what a feed.db of an earlier version does not have yet."""
+        columns = {row[1] for row in self._db.read("PRAGMA table_info(items)")}
+        if "background" not in columns:
+            self._db.write("ALTER TABLE items ADD COLUMN background INTEGER NOT NULL DEFAULT 0")
 
     @property
     def database(self) -> FeedDatabase:
@@ -159,11 +173,12 @@ class ThreatStore:
     # Items
     # ------------------------------------------------------------------
 
-    def add(self, items: Iterable[FeedItem]) -> List[FeedItem]:
+    def add(self, items: Iterable[FeedItem], background: Collection[str] = ()) -> List[FeedItem]:
         """Store *items* and return the ones that were not known before.
 
         A known item keeps its read flag and first-seen time; its text is
-        refreshed, because feeds correct their headlines.
+        refreshed, because feeds correct their headlines. Ids in *background*
+        are stored as background items when they are new.
         """
         now = Timestamp.text(self._clock())
         unique = {item.id: item for item in items}
@@ -172,8 +187,8 @@ class ThreatStore:
         known = self._known_ids(list(unique))
         self._db.write_many(
             "INSERT INTO items (id, source, title, url, published, summary, cve_ids, packages, "
-            "known_exploited, severity, first_seen, last_seen) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "known_exploited, severity, first_seen, last_seen, background) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET title = excluded.title, url = excluded.url, "
             "published = excluded.published, summary = excluded.summary, "
             "cve_ids = excluded.cve_ids, packages = excluded.packages, "
@@ -186,7 +201,7 @@ class ThreatStore:
                     json.dumps([[p.ecosystem, p.name] for p in item.packages]),
                     int(item.is_known_exploited),
                     item.severity_hint.value if item.severity_hint else "",
-                    now, now,
+                    now, now, int(item.id in background),
                 )
                 for item in unique.values()
             ],
@@ -198,11 +213,16 @@ class ThreatStore:
         relevances: Optional[Iterable[Relevance]] = None,
         unread_only: bool = False,
         limit: int = 500,
+        newest_first: bool = False,
     ) -> List[StoredItem]:
-        """Stored items, the ones that affect the user first, then newest first."""
+        """Stored items, the ones that affect the user first, then newest first.
+
+        With *newest_first* the date alone decides the order.
+        """
         where, parameters = self._filter(relevances, unread_only)
+        order = self._NEWEST if newest_first else self._ORDER
         rows = self._db.read(
-            f"SELECT {self._COLUMNS} FROM items {where} ORDER BY {self._ORDER} LIMIT ?",
+            f"SELECT {self._COLUMNS} FROM items {where} ORDER BY {order} LIMIT ?",
             (*parameters, limit),
         )
         return [self._stored(row) for row in rows]
@@ -212,15 +232,20 @@ class ThreatStore:
         return self._stored(rows[0]) if rows else None
 
     def new_since(self, since: Optional[datetime]) -> List[StoredItem]:
-        """Items first seen after *since*; every item when *since* is ``None``."""
+        """Items first seen after *since*; every item when *since* is ``None``.
+
+        Background items are left out until they affect a project.
+        """
         rows = self._db.read(
-            f"SELECT {self._COLUMNS} FROM items WHERE first_seen > ? ORDER BY {self._ORDER}",
+            f"SELECT {self._COLUMNS} FROM items WHERE first_seen > ? AND {self._COUNTED} "
+            f"ORDER BY {self._ORDER}",
             (Timestamp.text(since) or "",),
         )
         return [self._stored(row) for row in rows]
 
-    def count(self) -> int:
-        return int(self._db.read("SELECT COUNT(*) FROM items")[0][0])
+    def count(self, relevances: Optional[Iterable[Relevance]] = None) -> int:
+        where, parameters = self._filter(relevances, unread_only=False)
+        return int(self._db.read(f"SELECT COUNT(*) FROM items {where}", parameters)[0][0])
 
     def purge(self) -> int:
         """Remove items no feed has listed for ``RETENTION_DAYS``; return how many."""
@@ -243,9 +268,11 @@ class ThreatStore:
         self._db.write(f"UPDATE items SET is_read = 1 {where}", parameters)
 
     def unread_counts(self) -> Dict[Relevance, int]:
+        """Unread items per relevance, without the background."""
         counts = {relevance: 0 for relevance in Relevance}
         for value, count in self._db.read(
-            "SELECT relevance, COUNT(*) FROM items WHERE is_read = 0 GROUP BY relevance"
+            f"SELECT relevance, COUNT(*) FROM items WHERE is_read = 0 AND {self._COUNTED} "
+            "GROUP BY relevance"
         ):
             try:
                 counts[Relevance(value)] = int(count)
@@ -386,7 +413,7 @@ class ThreatStore:
     @classmethod
     def _stored(cls, row: Tuple[Any, ...]) -> StoredItem:
         (item_id, source, title, url, published, summary, cve_ids, packages,
-         known_exploited, severity, first_seen, is_read, relevance, matches) = row
+         known_exploited, severity, first_seen, is_read, relevance, matches, background) = row
         item = FeedItem(
             id=item_id, source=source, title=title, url=url,
             published=Timestamp.parse(published), summary=summary,
@@ -405,4 +432,5 @@ class ThreatStore:
             read=bool(is_read),
             relevance=level,
             matches=tuple(cls._match(m) for m in json.loads(matches)),
+            background=bool(background),
         )

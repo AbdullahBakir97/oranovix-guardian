@@ -24,7 +24,6 @@ class ThreatFeedPage(ctk.CTkFrame):
     """Sidebar page "Threat Feed" with the tabs For you, All and Sources."""
 
     TABS = ("for_you", "all", "sources")
-    MAX_ROWS = 120
 
     _BADGE_COLORS = {
         Relevance.AFFECTS_YOU: "critical",
@@ -42,6 +41,8 @@ class ThreatFeedPage(ctk.CTkFrame):
         super().__init__(master, fg_color=tm.c("bg"), corner_radius=0, **kwargs)
         self._hub = hub
         self._tab = "for_you"
+        # Rows per tab; "Show more" adds another page.
+        self._limits: Dict[str, int] = {"for_you": hub.PAGE_SIZE, "all": hub.PAGE_SIZE}
         self._state: Optional[HubState] = None
         self._shown_key: Tuple[object, ...] = ()
         self._build()
@@ -213,8 +214,10 @@ class ThreatFeedPage(ctk.CTkFrame):
             self._render_sources(health)
             return
 
-        items = self._hub.items(for_you=self._tab == "for_you")
-        key = (self._tab, tuple((i.id, i.read, i.relevance, i.matches) for i in items))
+        for_you = self._tab == "for_you"
+        items = self._hub.items(for_you, self._limits[self._tab])
+        hidden = self._hub.item_count(for_you) - len(items)
+        key = (self._tab, hidden, tuple((i.id, i.read, i.relevance, i.matches) for i in items))
         if key == self._shown_key and not force:
             return
         self._shown_key = key
@@ -230,12 +233,16 @@ class ThreatFeedPage(ctk.CTkFrame):
             ctk.CTkLabel(self._list, text=empty, font=ctk.CTkFont(size=12),
                          text_color=tm.c("text3")).pack(pady=28)
             return
-        for item in items[: self.MAX_ROWS]:
+        for item in items:
             self._item_row(item)
-        hidden = len(items) - self.MAX_ROWS
         if hidden > 0:
-            ctk.CTkLabel(self._list, text=lm.t("tf_more_items", count=hidden),
-                         font=ctk.CTkFont(size=10), text_color=tm.c("text3")).pack(pady=8)
+            self._button(
+                self._list, lm.t("tf_show_more", count=hidden), self._show_more, primary=False
+            ).pack(pady=8)
+
+    def _show_more(self) -> None:
+        self._limits[self._tab] += self._hub.PAGE_SIZE
+        self._render(force=True)
 
     def _clear(self) -> None:
         for child in self._list.winfo_children():

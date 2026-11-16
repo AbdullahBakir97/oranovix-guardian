@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
 from scanner_engine.deps.manifests import Dependency
@@ -48,6 +49,7 @@ class NameMatcher:
     _WORD = re.compile(r"[a-z0-9]+")
 
     @classmethod
+    @lru_cache(maxsize=16384)       # the whole catalog is compared with every package
     def words(cls, name: str) -> Tuple[str, ...]:
         return tuple(cls._WORD.findall(name.lower()))
 

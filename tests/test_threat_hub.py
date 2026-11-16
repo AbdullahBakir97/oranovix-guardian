@@ -98,7 +98,7 @@ def test_refresh_in_the_background_notifies_when_done(tmp_path: Path, osv_db: OS
     assert any(state.refreshing for state in rig.states)            # the page saw "refreshing"
     final = rig.states[-1]
     assert final.refreshing is False and final.last_report is not None
-    assert len(final.last_report.new_items) == 3
+    assert len(final.last_report.new_items) == 2 and final.last_report.background_items == 1
     assert final.unread_for_you == 2            # Django is confirmed, the lodash gateway is a guess
     assert final.last_success is not None and final.last_success.tzinfo is timezone.utc
     assert rig.feed.urls == [CisaKevSource.URL]
@@ -187,7 +187,7 @@ def test_digest_counts_what_is_new_since_the_last_visit(rig: Rig) -> None:
 
     digest = rig.hub.digest(rig.hub.store.last_visit())
 
-    assert digest.headline == "Since your last visit: 3 new, 1 affect your projects"
+    assert digest.headline == "Since your last visit: 2 new, 1 affect your projects"
 
 
 def test_interval_and_sources_are_saved(rig: Rig) -> None:
