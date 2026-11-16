@@ -217,7 +217,9 @@ class ThreatFeedPage(ctk.CTkFrame):
         for_you = self._tab == "for_you"
         items = self._hub.items(for_you, self._limits[self._tab])
         hidden = self._hub.item_count(for_you) - len(items)
-        key = (self._tab, hidden, tuple((i.id, i.read, i.relevance, i.matches) for i in items))
+        state = self._state or self._hub.state()
+        key = (self._tab, hidden, state.check,
+               tuple((i.id, i.read, i.relevance, i.matches) for i in items))
         if key == self._shown_key and not force:
             return
         self._shown_key = key
@@ -229,9 +231,9 @@ class ThreatFeedPage(ctk.CTkFrame):
         tm = ThemeManager()
         lm = LanguageManager()
         if not items:
-            empty = lm.t("tf_empty_for_you") if self._tab == "for_you" else lm.t("tf_empty_all")
+            empty = self.empty_text(state, for_you)
             ctk.CTkLabel(self._list, text=empty, font=ctk.CTkFont(size=12),
-                         text_color=tm.c("text3")).pack(pady=28)
+                         text_color=tm.c("text3"), wraplength=700).pack(pady=28)
             return
         for item in items:
             self._item_row(item)
@@ -243,6 +245,16 @@ class ThreatFeedPage(ctk.CTkFrame):
     def _show_more(self) -> None:
         self._limits[self._tab] += self._hub.PAGE_SIZE
         self._render(force=True)
+
+    @staticmethod
+    def empty_text(state: HubState, for_you: bool) -> str:
+        """Text of an empty tab. "Nothing affects you" only when that was really checked."""
+        lm = LanguageManager()
+        if not for_you:
+            return lm.t("tf_empty_all")
+        if state.checked:
+            return lm.t("tf_empty_for_you")
+        return lm.t(state.check.text_key)
 
     def _clear(self) -> None:
         for child in self._list.winfo_children():

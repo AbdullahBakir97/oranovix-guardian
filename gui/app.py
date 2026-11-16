@@ -428,7 +428,7 @@ class CodeGuardianApp(ctk.CTk):
         text = digest.headline
         if failed_sources:
             text += "  ·  " + LanguageManager().t("tf_refresh_failed", count=failed_sources)
-        level = "warn" if digest.affecting_count or failed_sources else "info"
+        level = "warn" if digest.affecting_count or failed_sources or not digest.checked else "info"
         self._status_bar.set_status(text, level)
 
     def _start_threat_feed(self) -> None:

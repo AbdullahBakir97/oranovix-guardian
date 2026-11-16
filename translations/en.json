@@ -388,5 +388,11 @@
   "tf_alarm_many_mixed": "{count} exploited or critical vulnerabilities affect your projects",
   "tf_alarm_many_line": "{project}: {package} {version} ({advisory})",
   "tf_alarm_many_more": "and {count} more",
-  "tf_alarm_many_fix": "Open the Threat Feed, tab \"For you\", and update the listed packages."
+  "tf_alarm_many_fix": "Open the Threat Feed, tab \"For you\", and update the listed packages.",
+  "tf_not_checked_off": "Not checked: the Threat Feed is switched off.",
+  "tf_not_checked_never": "Not checked yet: the feed has not been downloaded.",
+  "tf_not_checked_unreachable": "Not checked: no source could be reached. Saved items are shown.",
+  "tf_not_checked_no_projects": "Not checked: add your projects on the My Projects page.",
+  "tf_not_checked_no_database": "Not checked: update the vulnerability database in Settings.",
+  "proj_feed_unchecked": "Not checked"
 }

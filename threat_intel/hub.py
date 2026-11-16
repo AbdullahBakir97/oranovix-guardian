@@ -12,6 +12,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from core.alarm_center import AlarmCenter
@@ -37,6 +38,21 @@ def in_thread(work: Callable[[], None]) -> None:
     threading.Thread(target=work, name="ThreatIntelWork", daemon=True).start()
 
 
+class CheckState(str, Enum):
+    """Whether "nothing affects your projects" may be said at all."""
+
+    CHECKED = "checked"
+    OFF = "off"                     # the feed is switched off
+    NEVER = "never"                 # no download has succeeded yet
+    UNREACHABLE = "unreachable"     # the last refresh reached no source
+    NO_PROJECTS = "no_projects"
+    NO_DATABASE = "no_database"     # without OSV data nothing can be confirmed
+
+    @property
+    def text_key(self) -> str:
+        return f"tf_not_checked_{self.value}"
+
+
 @dataclass(frozen=True)
 class HubState:
     """Snapshot handed to listeners."""
@@ -49,6 +65,26 @@ class HubState:
     database_ready: bool
     last_report: Optional[RefreshReport] = None
     uptime_event: Optional[UptimeEvent] = None      # set only on the notification it belongs to
+    has_projects: bool = True
+
+    @property
+    def check(self) -> CheckState:
+        """The first reason why the projects count as not checked."""
+        if not self.enabled:
+            return CheckState.OFF
+        if self.last_success is None:
+            return CheckState.NEVER
+        if self.last_report is not None and self.last_report.offline:
+            return CheckState.UNREACHABLE
+        if not self.has_projects:
+            return CheckState.NO_PROJECTS
+        if not self.database_ready:
+            return CheckState.NO_DATABASE
+        return CheckState.CHECKED
+
+    @property
+    def checked(self) -> bool:
+        return self.check is CheckState.CHECKED
 
 
 @dataclass(frozen=True)
@@ -61,6 +97,7 @@ class ProjectRow:
     down_since: Optional[datetime]
     affecting: int                          # unread feed items that affect it
     packages: int
+    checked: bool = True                    # False: "nothing affects it" cannot be said
 
 
 Listener = Callable[[HubState], None]
@@ -162,6 +199,7 @@ class ThreatIntelHub:
             database_ready=self._service.database_ready,
             last_report=self._last_report,
             uptime_event=uptime_event,
+            has_projects=bool(self._registry.list()),
         )
 
     def items(self, for_you: bool, limit: int = PAGE_SIZE) -> List[StoredItem]:
@@ -185,14 +223,21 @@ class ThreatIntelHub:
         return self._service.source_health()
 
     def digest(self, since: Optional[datetime]) -> Digest:
-        """What arrived after *since*, worded in the current language."""
+        """What arrived after *since*, worded in the current language.
+
+        When the projects could not be checked, the headline says why.
+        """
+        lm = LanguageManager()
+        check = self.state().check
         return DigestBuilder.build(
             self._store.items(limit=100000), self._registry.list(), since,
-            DigestTexts.translated(LanguageManager().t),
+            DigestTexts.translated(lm.t),
+            not_checked="" if check is CheckState.CHECKED else lm.t(check.text_key),
         )
 
     def project_rows(self) -> List[ProjectRow]:
         unread = self._store.items([Relevance.AFFECTS_YOU], unread_only=True, limit=100000)
+        checked = self.state().checked
         rows = []
         for project in self._registry.list():
             check = self._uptime_store.latest(project.name) if project.site_url else None
@@ -210,6 +255,7 @@ class ThreatIntelHub:
                     1 for item in unread if any(m.project == project.name for m in item.matches)
                 ),
                 packages=len(self._service.inventory(project).dependencies),
+                checked=checked,
             ))
         return rows
 

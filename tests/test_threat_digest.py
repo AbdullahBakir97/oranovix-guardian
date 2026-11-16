@@ -172,3 +172,18 @@ def test_module_sends_nothing() -> None:
     source = inspect.getsource(digest_module)
     for forbidden in ("smtplib", "urllib.request", "socket", "telegram", "requests", "open("):
         assert forbidden not in source
+
+
+def test_not_checked_replaces_the_headline_and_calls_no_project_clear() -> None:
+    reason = "Not checked: the Threat Feed is switched off."
+    digest = DigestBuilder.build(sample(), [SHOP, BLOG], VISIT, not_checked=reason)
+
+    assert digest.headline == reason and digest.checked is False
+    assert digest.text.splitlines()[0] == reason
+    assert "Shop: 1 item(s) affect it" in digest.text
+    assert "nothing new affects it" not in digest.text and "nothing new affects it" not in digest.html
+    assert f"<h2>{reason}</h2>" in digest.html
+
+    nothing = DigestBuilder.build([], [SHOP], VISIT, not_checked=reason)
+    assert nothing.headline == reason and "Nothing new" not in nothing.text
+    assert DigestBuilder.build([], [SHOP], VISIT).checked is True

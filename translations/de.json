@@ -364,5 +364,11 @@
   "tf_alarm_many_mixed": "{count} aktiv ausgenutzte oder kritische Schwachstellen betreffen Ihre Projekte",
   "tf_alarm_many_line": "{project}: {package} {version} ({advisory})",
   "tf_alarm_many_more": "und {count} weitere",
-  "tf_alarm_many_fix": "\u00d6ffnen Sie den Threat-Feed, Reiter \"F\u00fcr Sie\", und aktualisieren Sie die genannten Pakete."
+  "tf_alarm_many_fix": "\u00d6ffnen Sie den Threat-Feed, Reiter \"F\u00fcr Sie\", und aktualisieren Sie die genannten Pakete.",
+  "tf_not_checked_off": "Nicht gepr\u00fcft: Der Threat-Feed ist ausgeschaltet.",
+  "tf_not_checked_never": "Noch nicht gepr\u00fcft: Der Feed wurde noch nicht heruntergeladen.",
+  "tf_not_checked_unreachable": "Nicht gepr\u00fcft: Keine Quelle war erreichbar. Gespeicherte Eintr\u00e4ge werden angezeigt.",
+  "tf_not_checked_no_projects": "Nicht gepr\u00fcft: F\u00fcgen Sie Ihre Projekte auf der Seite Meine Projekte hinzu.",
+  "tf_not_checked_no_database": "Nicht gepr\u00fcft: Aktualisieren Sie die Schwachstellen-Datenbank in den Einstellungen.",
+  "proj_feed_unchecked": "Nicht gepr\u00fcft"
 }

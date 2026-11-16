@@ -235,6 +235,8 @@ class ProjectsPage(ctk.CTkFrame):
         lm = LanguageManager()
         if row.affecting:
             return lm.t("proj_feed_affecting", count=row.affecting), "critical"
+        if not row.checked:
+            return lm.t("proj_feed_unchecked"), "warning"
         return lm.t("proj_feed_clear"), "text3"
 
     # ------------------------------------------------------------------

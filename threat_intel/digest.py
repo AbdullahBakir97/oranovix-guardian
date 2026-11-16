@@ -59,6 +59,7 @@ class Digest:
     headline: str
     text: str
     html: str
+    checked: bool = True        # False: the headline says why nothing was checked
 
 
 class DigestBuilder:
@@ -73,10 +74,14 @@ class DigestBuilder:
         projects: Sequence[Project],
         since: Optional[datetime],
         texts: DigestTexts = DigestTexts(),
+        not_checked: str = "",
     ) -> Digest:
         """Digest of the items first seen after *since* (all of them when ``None``).
 
         Background items are not news, unless they affect a project.
+        *not_checked* is the reason why the projects could not be checked
+        (feed off, no database, ...). It replaces the headline, and no
+        project is then called clear.
         """
         new = [
             item for item in items
@@ -87,17 +92,21 @@ class DigestBuilder:
         possible = [item for item in new if item.relevance is Relevance.POSSIBLE]
         other = [item for item in new if item.relevance is Relevance.GENERAL]
 
-        headline = (
-            texts.headline.format(new=len(new), affecting=len(affecting))
-            if new else texts.nothing_new
-        )
+        if not_checked:
+            headline = not_checked
+        elif new:
+            headline = texts.headline.format(new=len(new), affecting=len(affecting))
+        else:
+            headline = texts.nothing_new
+        checked = not not_checked
         return Digest(
             new_count=len(new),
             affecting_count=len(affecting),
             possible_count=len(possible),
             headline=headline,
-            text=cls._text(headline, affecting, possible, other, projects, texts),
-            html=cls._html(headline, affecting, possible, other, projects, texts),
+            text=cls._text(headline, affecting, possible, other, projects, texts, checked),
+            html=cls._html(headline, affecting, possible, other, projects, texts, checked),
+            checked=checked,
         )
 
     @staticmethod
@@ -113,6 +122,7 @@ class DigestBuilder:
     def _text(
         cls, headline: str, affecting: Sequence[StoredItem], possible: Sequence[StoredItem],
         other: Sequence[StoredItem], projects: Sequence[Project], texts: DigestTexts,
+        checked: bool = True,
     ) -> str:
         lines: List[str] = [headline]
         for title, group in ((texts.affecting, affecting), (texts.possible, possible)):
@@ -128,7 +138,7 @@ class DigestBuilder:
             lines += [f"- {cls._line(item, texts)}" for item in other[: cls.MAX_OTHER]]
             if len(other) > cls.MAX_OTHER:
                 lines.append(f"  {texts.more.format(count=len(other) - cls.MAX_OTHER)}")
-        project_lines = cls._project_lines(projects, affecting, texts)
+        project_lines = cls._project_lines(projects, affecting, texts, checked)
         if project_lines:
             lines += ["", texts.projects] + [f"- {line}" for line in project_lines]
         return "\n".join(lines) + "\n"
@@ -152,13 +162,16 @@ class DigestBuilder:
 
     @staticmethod
     def _project_lines(
-        projects: Sequence[Project], affecting: Sequence[StoredItem], texts: DigestTexts
+        projects: Sequence[Project], affecting: Sequence[StoredItem], texts: DigestTexts,
+        checked: bool = True,
     ) -> List[str]:
         lines = []
         for project in projects:
             count = sum(
                 1 for item in affecting if any(m.project == project.name for m in item.matches)
             )
+            if not count and not checked:
+                continue        # not checked is not the same as clear
             template = texts.project_line if count else texts.project_clear
             lines.append(template.format(name=project.name, count=count))
         return lines
@@ -171,6 +184,7 @@ class DigestBuilder:
     def _html(
         cls, headline: str, affecting: Sequence[StoredItem], possible: Sequence[StoredItem],
         other: Sequence[StoredItem], projects: Sequence[Project], texts: DigestTexts,
+        checked: bool = True,
     ) -> str:
         esc = html.escape
         parts: List[str] = [f"<h2>{esc(headline)}</h2>"]
@@ -193,7 +207,7 @@ class DigestBuilder:
             parts.append("</ul>")
             if len(other) > cls.MAX_OTHER:
                 parts.append(f"<p>{esc(texts.more.format(count=len(other) - cls.MAX_OTHER))}</p>")
-        project_lines = cls._project_lines(projects, affecting, texts)
+        project_lines = cls._project_lines(projects, affecting, texts, checked)
         if project_lines:
             parts.append(f"<h3>{esc(texts.projects)}</h3>")
             parts.append("<ul>" + "".join(f"<li>{esc(line)}</li>" for line in project_lines) + "</ul>")
