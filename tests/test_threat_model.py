@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import io
+import socket
 import urllib.error
 import urllib.request
+import urllib.response
 from datetime import datetime, timedelta, timezone
 from email.message import Message
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -259,3 +262,154 @@ def test_uptime_mode_allows_http_and_cuts_long_answers() -> None:
     opener = RecordingOpener(FakeResponse(b"x" * 500))
     response = HttpFetcher(allow_http=True, max_bytes=100, truncate=True, opener=opener).get("http://example.org/")
     assert response.ok and len(response.body) == 100
+
+
+# ---------------------------------------------------------------------------
+# Feed fetches never reach internal addresses (DNS and HTTPS are faked)
+# ---------------------------------------------------------------------------
+
+PUBLIC = "93.184.215.14"
+DNS: Dict[str, List[str]] = {
+    "localhost": ["127.0.0.1", "::1"],
+    "feeds.example.org": [PUBLIC],
+    "mirror.example.org": ["93.184.215.15"],
+    "split.example.org": [PUBLIC, "10.0.0.7"],
+    "metadata.example.org": ["169.254.169.254"],
+}
+
+
+def fake_getaddrinfo(host: str, port: Any, *args: Any, **kwargs: Any) -> List[Any]:
+    host = host.strip("[]")
+    addresses = DNS.get(host, [host])     # an IP literal resolves to itself
+    result = []
+    for address in addresses:
+        family = socket.AF_INET6 if ":" in address else socket.AF_INET
+        result.append((family, socket.SOCK_STREAM, 6, "", (address, port)))
+    return result
+
+
+@pytest.fixture
+def fake_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(socket, "create_connection", _forbidden)
+    monkeypatch.setattr(socket.socket, "connect", _forbidden)
+
+
+def _forbidden(*args: Any, **kwargs: Any) -> Any:
+    raise AssertionError("network access during a test")
+
+
+@pytest.mark.parametrize("url", [
+    "https://127.0.0.1/feed", "https://localhost/feed", "https://10.0.0.5/feed",
+    "https://169.254.169.254/latest/meta-data/", "https://[::1]/feed",
+    "https://[::ffff:127.0.0.1]/feed", "https://0.0.0.0/feed",
+])
+def test_internal_hosts_are_refused(fake_dns: None, url: str) -> None:
+    opener = RecordingOpener(FakeResponse(b"x"))
+    with pytest.raises(FetchError, match="internal address"):
+        HttpFetcher(public_only=True, opener=opener).get(url)
+    assert opener.requests == []
+
+
+def test_host_with_public_and_private_addresses_is_refused(fake_dns: None) -> None:
+    opener = RecordingOpener(FakeResponse(b"x"))
+    with pytest.raises(FetchError, match="10.0.0.7"):
+        HttpFetcher(public_only=True, opener=opener).get("https://split.example.org/feed")
+    assert opener.requests == []
+
+
+def test_unresolvable_host_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_such_host(*args: Any, **kwargs: Any) -> Any:
+        raise socket.gaierror("Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", no_such_host)
+    with pytest.raises(FetchError, match="could not be resolved"):
+        HttpFetcher(public_only=True, opener=RecordingOpener(FakeResponse(b"x"))).get("https://nowhere.example/")
+
+
+def test_public_host_is_fetched(fake_dns: None) -> None:
+    opener = RecordingOpener(FakeResponse(b"feed"))
+    assert HttpFetcher(public_only=True, opener=opener).get("https://feeds.example.org/feed").body == b"feed"
+
+
+def test_without_the_option_local_hosts_stay_allowed(fake_dns: None) -> None:
+    # uptime checks of the user's own (maybe local) sites
+    opener = RecordingOpener(FakeResponse(b"ok"))
+    fetcher = HttpFetcher(allow_http=True, truncate=True, opener=opener)
+    assert fetcher.get("http://127.0.0.1:8000/").ok
+
+
+class FakeHttps:
+    """Stands in for urllib's HTTPS handler: answers from a table, opens no socket."""
+
+    def __init__(self, answers: Dict[str, Any]) -> None:
+        self.answers = answers
+        self.urls: List[str] = []
+
+    def __call__(self, handler: Any, request: urllib.request.Request) -> Any:
+        url = request.full_url
+        self.urls.append(url)
+        status, body, headers = self.answers[url]
+        message = Message()
+        for name, value in headers.items():
+            message[name] = value
+        response = urllib.response.addinfourl(io.BytesIO(body), message, url, status)
+        response.msg = "Found" if status in (301, 302) else "OK"    # type: ignore[attr-defined]
+        return response
+
+
+def https(monkeypatch: pytest.MonkeyPatch, answers: Dict[str, Any]) -> FakeHttps:
+    fake = FakeHttps(answers)
+    monkeypatch.setattr(urllib.request.HTTPSHandler, "https_open",
+                        lambda handler, request: fake(handler, request))
+    return fake
+
+
+def test_redirect_to_an_internal_address_is_refused(fake_dns: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = https(monkeypatch, {
+        "https://feeds.example.org/feed": (302, b"", {"Location": "https://169.254.169.254/latest/meta-data/"}),
+        "https://169.254.169.254/latest/meta-data/": (200, b"secret", {}),
+    })
+    with pytest.raises(FetchError, match="internal address"):
+        HttpFetcher(public_only=True).get("https://feeds.example.org/feed")
+    assert fake.urls == ["https://feeds.example.org/feed"]
+
+
+def test_redirect_to_a_name_that_resolves_internally_is_refused(fake_dns: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = https(monkeypatch, {
+        "https://feeds.example.org/feed": (301, b"", {"Location": "https://metadata.example.org/"}),
+    })
+    with pytest.raises(FetchError, match="internal address"):
+        HttpFetcher(public_only=True).get("https://feeds.example.org/feed")
+    assert fake.urls == ["https://feeds.example.org/feed"]
+
+
+def test_redirect_to_another_public_host_works(fake_dns: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = https(monkeypatch, {
+        "https://feeds.example.org/feed": (302, b"", {"Location": "https://mirror.example.org/feed.xml"}),
+        "https://mirror.example.org/feed.xml": (200, b"<rss/>", {}),
+    })
+    response = HttpFetcher(public_only=True).get("https://feeds.example.org/feed")
+    assert response.ok and response.body == b"<rss/>"
+    assert fake.urls == ["https://feeds.example.org/feed", "https://mirror.example.org/feed.xml"]
+
+
+def test_feed_refresh_refuses_a_source_on_an_internal_address(
+    fake_dns: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from threat_intel.projects import ProjectRegistry
+    from threat_intel.service import ThreatFeedService
+    from threat_intel.settings import ThreatFeedSettings
+    from threat_intel.sources import SourceConfig
+    from threat_intel.store import FeedDatabase, ThreatStore
+
+    fake = https(monkeypatch, {})
+    database = FeedDatabase(str(tmp_path / "feed.db"))
+    settings = ThreatFeedSettings(str(tmp_path / "settings.json"))
+    settings.update(enabled=True, asked=True,
+                    sources=(SourceConfig("Inside", "https://localhost/rss"),))
+
+    report = ThreatFeedService(ThreatStore(database), ProjectRegistry(database), settings).refresh()
+
+    assert len(report.failures) == 1 and "internal address" in report.failures[0]
+    assert fake.urls == []

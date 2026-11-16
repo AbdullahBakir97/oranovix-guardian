@@ -97,7 +97,7 @@ class ThreatFeedService:
             if not config.enabled:
                 return RefreshReport(self._clock(), disabled=True)
 
-            fetcher = self._fetcher or HttpFetcher()
+            fetcher = self._fetcher or HttpFetcher(public_only=True)
             collected: List[FeedItem] = []
             failures: List[str] = []
             succeeded = 0

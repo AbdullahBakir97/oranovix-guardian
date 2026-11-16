@@ -5,15 +5,21 @@ HTTP access of the Threat Feed.
 to the sources, so tests replace it with a fake and never touch the
 network. A request carries the URL, a fixed User-Agent and the cache
 validators of the last download, and nothing else.
+
+Feed downloads run with ``public_only``: a host that resolves to a
+loopback, private or otherwise internal address is refused, also when a
+redirect points there.
 """
 from __future__ import annotations
 
+import ipaddress
+import socket
 import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional
 from urllib.parse import urlsplit
 
 
@@ -61,6 +67,44 @@ class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
 
 
 Opener = Callable[[urllib.request.Request, float], Any]
+IpAddress = Any     # ipaddress.IPv4Address | ipaddress.IPv6Address
+
+
+class PublicAddressGuard:
+    """Refuses hosts that resolve to anything but public addresses."""
+
+    def __call__(self, host: str, port: int) -> None:
+        for address in self.resolve(host, port):
+            if self.is_internal(address):
+                raise FetchError(f"{host} points to an internal address ({address}).")
+
+    @staticmethod
+    def resolve(host: str, port: int) -> List[IpAddress]:
+        try:
+            # looked up at call time, so tests can replace it
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except (OSError, UnicodeError) as exc:
+            raise FetchError(f"{host} could not be resolved.") from exc
+        addresses = []
+        for info in infos:
+            text = str(info[4][0]).split("%", 1)[0]
+            try:
+                addresses.append(ipaddress.ip_address(text))
+            except ValueError as exc:
+                raise FetchError(f"{host} resolved to an invalid address.") from exc
+        if not addresses:
+            raise FetchError(f"{host} could not be resolved.")
+        return addresses
+
+    @staticmethod
+    def is_internal(address: IpAddress) -> bool:
+        mapped = getattr(address, "ipv4_mapped", None)
+        if mapped is not None:
+            address = mapped
+        return bool(
+            address.is_loopback or address.is_private or address.is_link_local
+            or address.is_reserved or address.is_multicast or address.is_unspecified
+        )
 
 
 class HttpFetcher(Fetcher):
@@ -77,12 +121,16 @@ class HttpFetcher(Fetcher):
         truncate: bool = False,
         timeout: float = TIMEOUT_SECONDS,
         opener: Optional[Opener] = None,
+        public_only: bool = False,
     ) -> None:
         """*allow_http* and *truncate* exist for uptime checks of the user's own sites.
 
         With *truncate* a long answer is cut at *max_bytes* instead of refused.
+        With *public_only* every host, also of a redirect, must resolve to
+        public addresses only.
         """
         self._schemes = frozenset({"https", "http"} if allow_http else {"https"})
+        self._guard: Optional[PublicAddressGuard] = PublicAddressGuard() if public_only else None
         self._max_bytes = max_bytes
         self._truncate = truncate
         self._timeout = timeout
@@ -132,6 +180,12 @@ class HttpFetcher(Fetcher):
         if parts.scheme.lower() not in self._schemes or not host:
             allowed = " or ".join(sorted(self._schemes))
             raise FetchError(f"Only {allowed} addresses are allowed.")
+        if self._guard is not None:
+            try:
+                port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
+            except ValueError as exc:
+                raise FetchError("The address is not valid.") from exc
+            self._guard(host, port)
 
     def _read(self, response: Any) -> bytes:
         declared = self._header(response.headers, "Content-Length")
