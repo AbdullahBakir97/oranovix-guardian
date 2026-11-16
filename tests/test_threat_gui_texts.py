@@ -11,7 +11,7 @@ import pytest
 
 from core.language_manager import LanguageManager
 from scanner_engine.base import Severity
-from threat_intel.hub import HubState, ProjectRow
+from threat_intel.hub import CheckState, HubState, ProjectRow
 from threat_intel.models import FeedItem, ProjectMatch, Relevance, SourceHealth, StoredItem
 from threat_intel.projects import Project, ScanSummary
 from threat_intel.service import RefreshReport
@@ -38,6 +38,7 @@ def used_keys() -> Set[str]:
         keys.update(KEY.findall(path.read_text(encoding="utf-8")))
     keys.update(f"tf_tab_{tab}" for tab in ("for_you", "all", "sources"))
     keys.update(f"tf_badge_{relevance.value}" for relevance in Relevance)
+    keys.update(check.text_key for check in CheckState if check is not CheckState.CHECKED)
     keys.update(f"digest_{name}" for name in (
         "headline", "nothing_new", "affecting", "possible", "other", "more",
         "exploited", "fix", "projects", "project_line", "project_clear",
@@ -179,7 +180,7 @@ def test_source_status(english: LanguageManager) -> None:
 
 def row(**changes: object) -> ProjectRow:
     values: Dict[str, Any] = dict(project=Project("Shop", "/srv/shop", "https://shop.example.org/"), scan=None,
-                  check=None, down_since=None, affecting=0, packages=5)
+                  check=None, down_since=None, affecting=0, packages=5, checked=True)
     values.update(changes)
     return ProjectRow(**values)
 
@@ -218,3 +219,64 @@ def test_project_feed_badge(english: LanguageManager) -> None:
     assert ProjectsPage.feed_text(row(affecting=2)) == ("2 affect it", "critical")
     assert ProjectsPage.feed_text(row()) == ("Nothing", "text3")
     assert ProjectsPage.path_text(row()).endswith("5 packages")
+
+
+# ---------------------------------------------------------------------------
+# "Not checked" is not "nothing affects you"
+# ---------------------------------------------------------------------------
+
+OFFLINE = RefreshReport(NOW, failures=("News: no route to host",))
+NOT_CHECKED = [
+    (dict(enabled=False), CheckState.OFF, "Not checked: the Threat Feed is switched off."),
+    (dict(last_success=None), CheckState.NEVER, "Not checked yet: the feed has not been downloaded."),
+    (dict(last_report=OFFLINE), CheckState.UNREACHABLE,
+     "Not checked: no source could be reached. Saved items are shown."),
+    (dict(has_projects=False), CheckState.NO_PROJECTS,
+     "Not checked: add your projects on the My Projects page."),
+    (dict(database_ready=False), CheckState.NO_DATABASE,
+     "Not checked: update the vulnerability database in Settings."),
+]
+
+
+@pytest.mark.parametrize("changes, expected, text", NOT_CHECKED)
+def test_for_you_tab_says_why_nothing_was_checked(
+    english: LanguageManager, changes: Dict[str, Any], expected: CheckState, text: str
+) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    current = state(**changes)
+    assert current.check is expected and not current.checked
+    assert ThreatFeedPage.empty_text(current, for_you=True) == text
+    assert ThreatFeedPage.empty_text(current, for_you=False) == "No items yet. Press Refresh."
+
+
+def test_nothing_affects_you_only_after_a_real_check(english: LanguageManager) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    ok = state(last_report=RefreshReport(NOW, sources_ok=4))
+    assert ok.check is CheckState.CHECKED
+    assert ThreatFeedPage.empty_text(ok, for_you=True) == "Nothing affects your projects right now."
+    # One source failed, the others answered: that still is a check.
+    partly = state(last_report=RefreshReport(NOW, failures=("News: timed out",), sources_ok=3))
+    assert partly.checked
+
+
+def test_switched_off_wins_over_every_other_reason() -> None:
+    assert state(enabled=False, last_success=None, database_ready=False).check is CheckState.OFF
+    assert state(last_success=None, database_ready=False).check is CheckState.NEVER
+
+
+@pytest.mark.parametrize("language", ["en", "de", "ar"])
+def test_not_checked_texts_differ_from_the_all_clear(language: str) -> None:
+    texts = json.loads((TRANSLATIONS / f"{language}.json").read_text(encoding="utf-8"))
+    reasons = [texts[check.text_key] for check in CheckState if check is not CheckState.CHECKED]
+    assert len(set(reasons)) == 5
+    assert texts["tf_empty_for_you"] not in reasons
+    assert texts["proj_feed_unchecked"] != texts["proj_feed_clear"]
+
+
+def test_project_feed_cell_says_not_checked(english: LanguageManager) -> None:
+    from gui.pages.projects_page import ProjectsPage
+
+    assert ProjectsPage.feed_text(row(checked=False)) == ("Not checked", "warning")
+    assert ProjectsPage.feed_text(row(checked=False, affecting=1)) == ("1 affect it", "critical")

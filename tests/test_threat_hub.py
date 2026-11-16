@@ -14,7 +14,7 @@ from core.alarm_center import AlarmCenter, SqliteSeenFindingStore
 from feed_fakes import FakeFetcher
 from scanner_engine.deps.osv_db import OSVDatabase
 from threat_intel.fetcher import FetchError, FetchResponse
-from threat_intel.hub import HubState, ThreatIntelHub, in_thread
+from threat_intel.hub import CheckState, HubState, ThreatIntelHub, in_thread
 from threat_intel.models import Relevance
 from threat_intel.projects import ScanSummaryLookup
 from threat_intel.relevance import RelevanceMatcher
@@ -98,7 +98,7 @@ def test_refresh_in_the_background_notifies_when_done(tmp_path: Path, osv_db: OS
     assert any(state.refreshing for state in rig.states)            # the page saw "refreshing"
     final = rig.states[-1]
     assert final.refreshing is False and final.last_report is not None
-    assert len(final.last_report.new_items) == 3
+    assert len(final.last_report.new_items) == 2 and final.last_report.background_items == 1
     assert final.unread_for_you == 2            # Django is confirmed, the lodash gateway is a guess
     assert final.last_success is not None and final.last_success.tzinfo is timezone.utc
     assert rig.feed.urls == [CisaKevSource.URL]
@@ -187,7 +187,7 @@ def test_digest_counts_what_is_new_since_the_last_visit(rig: Rig) -> None:
 
     digest = rig.hub.digest(rig.hub.store.last_visit())
 
-    assert digest.headline == "Since your last visit: 3 new, 1 affect your projects"
+    assert digest.headline == "Since your last visit: 2 new, 1 affect your projects"
 
 
 def test_interval_and_sources_are_saved(rig: Rig) -> None:
@@ -209,3 +209,59 @@ def test_broken_listener_is_dropped(rig: Rig) -> None:
     rig.hub.notify()
     rig.hub.notify()
     assert len(rig.states) == 2
+
+
+# ---------------------------------------------------------------------------
+# The digest line says when the projects were not checked
+# ---------------------------------------------------------------------------
+
+def test_digest_line_while_the_feed_is_off(rig: Rig) -> None:
+    rig.hub.registry.add("Shop", str(OLD_SHOP))
+
+    digest = rig.hub.digest(None)
+
+    assert digest.headline == "Not checked: the Threat Feed is switched off."
+    assert rig.hub.project_rows()[0].checked is False
+
+
+def test_digest_line_before_the_first_download_and_after_it(rig: Rig) -> None:
+    rig.settings.update(enabled=True, asked=True)
+    rig.hub.registry.add("Shop", str(OLD_SHOP))
+    assert rig.hub.digest(None).headline == "Not checked yet: the feed has not been downloaded."
+
+    rig.hub.refresh_now()
+
+    assert rig.hub.state().check is CheckState.CHECKED
+    assert rig.hub.digest(None).headline.startswith("Since your last visit:")
+    assert rig.hub.project_rows()[0].checked is True
+
+
+def test_digest_line_when_every_source_failed(rig: Rig) -> None:
+    rig.settings.update(enabled=True, asked=True)
+    rig.hub.registry.add("Shop", str(OLD_SHOP))
+    rig.hub.refresh_now()
+    rig.feed.answers.clear()
+
+    rig.hub.refresh_now()
+
+    assert rig.hub.state().check is CheckState.UNREACHABLE
+    assert rig.hub.digest(None).headline == "Not checked: no source could be reached. Saved items are shown."
+
+
+def test_digest_line_without_projects(rig: Rig) -> None:
+    rig.settings.update(enabled=True, asked=True)
+    rig.hub.refresh_now()
+
+    assert rig.hub.digest(None).headline == "Not checked: add your projects on the My Projects page."
+
+
+def test_digest_line_without_the_vulnerability_database(tmp_path: Path, osv_db: OSVDatabase) -> None:
+    rig = Rig(tmp_path, OSVDatabase(str(tmp_path / "missing.db")))
+    rig.settings.update(enabled=True, asked=True)
+    rig.hub.registry.add("Shop", str(OLD_SHOP))
+
+    rig.hub.refresh_now()
+
+    assert rig.hub.items(for_you=True)[0].relevance is Relevance.POSSIBLE      # guesses only
+    assert rig.hub.digest(None).headline == "Not checked: update the vulnerability database in Settings."
+    assert rig.hub.project_rows()[0].checked is False

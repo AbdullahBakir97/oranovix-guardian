@@ -288,6 +288,7 @@ DNS: Dict[str, List[str]] = {
     "mirror.example.org": ["93.184.215.15"],
     "split.example.org": [PUBLIC, "10.0.0.7"],
     "metadata.example.org": ["169.254.169.254"],
+    "tailnet.example.org": ["100.100.100.100"],
 }
 
 
@@ -316,6 +317,8 @@ def _forbidden(*args: Any, **kwargs: Any) -> Any:
     "https://127.0.0.1/feed", "https://localhost/feed", "https://10.0.0.5/feed",
     "https://169.254.169.254/latest/meta-data/", "https://[::1]/feed",
     "https://[::ffff:127.0.0.1]/feed", "https://0.0.0.0/feed",
+    "https://100.64.0.1/feed", "https://100.100.100.100/feed", "https://[fd7a:115c:a1e0::1]/feed",
+    "https://192.0.0.8/feed", "https://198.18.0.1/feed",
 ])
 def test_internal_hosts_are_refused(fake_dns: None, url: str) -> None:
     opener = RecordingOpener(FakeResponse(b"x"))
@@ -338,6 +341,13 @@ def test_unresolvable_host_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", no_such_host)
     with pytest.raises(FetchError, match="could not be resolved"):
         HttpFetcher(public_only=True, opener=RecordingOpener(FakeResponse(b"x"))).get("https://nowhere.example/")
+
+
+def test_name_that_resolves_into_carrier_nat_space_is_refused(fake_dns: None) -> None:
+    opener = RecordingOpener(FakeResponse(b"x"))
+    with pytest.raises(FetchError, match="100.100.100.100"):
+        HttpFetcher(public_only=True, opener=opener).get("https://tailnet.example.org/feed")
+    assert opener.requests == []
 
 
 def test_public_host_is_fetched(fake_dns: None) -> None:

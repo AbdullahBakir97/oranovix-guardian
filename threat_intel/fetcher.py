@@ -6,9 +6,9 @@ to the sources, so tests replace it with a fake and never touch the
 network. A request carries the URL, a fixed User-Agent and the cache
 validators of the last download, and nothing else.
 
-Feed downloads run with ``public_only``: a host that resolves to a
-loopback, private or otherwise internal address is refused, also when a
-redirect points there.
+Feed downloads run with ``public_only``: a host that resolves to any
+address that is not globally routable (loopback, private, carrier NAT,
+link-local, ...) is refused, also when a redirect points there.
 """
 from __future__ import annotations
 
@@ -101,8 +101,11 @@ class PublicAddressGuard:
         mapped = getattr(address, "ipv4_mapped", None)
         if mapped is not None:
             address = mapped
+        # "not global" also covers 100.64.0.0/10 (carrier NAT, Tailscale),
+        # which is neither private nor reserved for the ipaddress module.
         return bool(
-            address.is_loopback or address.is_private or address.is_link_local
+            not address.is_global
+            or address.is_loopback or address.is_private or address.is_link_local
             or address.is_reserved or address.is_multicast or address.is_unspecified
         )
 

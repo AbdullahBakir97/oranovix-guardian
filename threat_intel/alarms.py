@@ -4,11 +4,15 @@ Alarms for feed items that hit one of the user's projects.
 Only an item that is confirmed for an installed version AND is either
 exploited in the wild or rated critical is announced, once. Everything
 else stays silent and is only listed on the page.
+
+More than three such items at once are announced as one alarm with a
+count, so the first download of a whole catalog does not ring N times.
 """
 from __future__ import annotations
 
+import hashlib
 import os
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from core.alarm_center import Alarm, AlarmCenter
 from core.language_manager import LanguageManager
@@ -18,11 +22,15 @@ from scanner_engine.categories import IssueCategory
 from .models import ProjectMatch, Relevance, StoredItem
 from .store import ThreatStore
 
+Pending = Tuple[StoredItem, List[ProjectMatch]]
+
 
 class ThreatAlarmRaiser:
     """Hands qualifying feed items to the alarm center, once per item and project."""
 
     RULE_ID = "TF001"
+    SUMMARY_RULE_ID = "TF002"
+    MAX_SINGLE_ALARMS = 3
 
     def __init__(self, alarm_center: Optional[AlarmCenter], store: ThreatStore) -> None:
         self._alarm_center = alarm_center
@@ -40,28 +48,70 @@ class ThreatAlarmRaiser:
         )
 
     def raise_for(self, items: Iterable[StoredItem]) -> List[Alarm]:
-        """Raise one CRITICAL alarm per qualifying item that has not alarmed yet."""
+        """Raise one CRITICAL alarm per qualifying item that has not alarmed yet.
+
+        More than ``MAX_SINGLE_ALARMS`` of them become a single alarm.
+        """
         if self._alarm_center is None:
             return []
-        alarms: List[Alarm] = []
+        pending: List[Pending] = []
         for stored in items:
             if not self.deserves_alarm(stored):
                 continue
-            pending = [
+            matches = [
                 match for match in self._one_per_project(stored)
                 if not self._store.was_alarmed(stored.id, self._project_key(match))
             ]
-            if not pending:
-                continue
-            issues = [self.issue(stored, match) for match in pending]
+            if matches:
+                pending.append((stored, matches))
+
+        if len(pending) > self.MAX_SINGLE_ALARMS:
+            batches = [[self.summary_issue(pending)]]
+        else:
+            batches = [[self.issue(stored, match) for match in matches] for stored, matches in pending]
+        alarms: List[Alarm] = []
+        for issues in batches:
             # The projects differ, so the root is left empty and the project
             # is part of each finding id instead.
             alarm = self._alarm_center.notify(issues, scan_root="", full_scan=False)
-            for match in pending:
-                self._store.mark_alarmed(stored.id, self._project_key(match))
             if alarm is not None:
                 alarms.append(alarm)
+        for stored, matches in pending:
+            for match in matches:
+                self._store.mark_alarmed(stored.id, self._project_key(match))
         return alarms
+
+    @classmethod
+    def summary_issue(cls, pending: Sequence[Pending]) -> Issue:
+        """One issue for many items: the count, and the first three by name."""
+        lm = LanguageManager()
+        count = len(pending)
+        exploited = all(stored.item.is_known_exploited for stored, _ in pending)
+        named = [
+            lm.t("tf_alarm_many_line", project=matches[0].project, package=matches[0].package,
+                 version=matches[0].version, advisory=matches[0].advisory_id)
+            for _, matches in pending[: cls.MAX_SINGLE_ALARMS]
+        ]
+        description = "; ".join(named)
+        if count > cls.MAX_SINGLE_ALARMS:
+            description += "; " + lm.t("tf_alarm_many_more", count=count - cls.MAX_SINGLE_ALARMS)
+        first = pending[0][1][0]
+        keys = sorted(
+            f"{stored.id}|{cls._project_key(match)}" for stored, matches in pending for match in matches
+        )
+        digest = hashlib.sha256("\n".join(keys).encode("utf-8")).hexdigest()[:32]
+        return Issue(
+            rule_id=cls.SUMMARY_RULE_ID,
+            title=lm.t("tf_alarm_many" if exploited else "tf_alarm_many_mixed", count=count),
+            description=description,
+            severity=Severity.CRITICAL,
+            file_path=first.file_path or first.project_path,
+            line_number=first.line,
+            recommendation=lm.t("tf_alarm_many_fix"),
+            confidence="HIGH",
+            category=IssueCategory.DEPENDENCY,
+            finding_key=f"threat-feed|many|{digest}",
+        )
 
     @classmethod
     def issue(cls, stored: StoredItem, match: ProjectMatch) -> Issue:

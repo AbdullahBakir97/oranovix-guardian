@@ -7,7 +7,7 @@ Goal: daily security news and exploited vulnerabilities, matched on this machine
 | Step | Change | Main files |
 |------|--------|-----------|
 | 1 | Package `threat_intel`: `FeedItem`, `Relevance`, `FeedSource` (ABC), `HttpFetcher` (https only, 10 s timeout, 5 MB cap, User-Agent `OranovixGuardian`, ETag / If-Modified-Since, 304 = unchanged). All feed text is cleaned: tags and entities stripped, title 200 and summary 400 characters, only http/https links. | `threat_intel/models.py`, `threat_intel/fetcher.py`, `threat_intel/sanitize.py` |
-| 2 | `CisaKevSource` (newest 200 entries) and `RssSource` (RSS 2.0, RSS 1.0, Atom, parsed with defusedxml, no DTD allowed). Source list in `settings.json`. Each source keeps its own health; one failing source does not stop the others. | `threat_intel/sources.py`, `threat_intel/settings.py` |
+| 2 | `CisaKevSource` (every entry, cap 5000; see the gap fixes below) and `RssSource` (newest 200 items) (RSS 2.0, RSS 1.0, Atom, parsed with defusedxml, no DTD allowed). Source list in `settings.json`. Each source keeps its own health; one failing source does not stop the others. | `threat_intel/sources.py`, `threat_intel/settings.py` |
 | 3 | `ThreatStore` in `feed.db`: dedupe by id, read flag, first seen, unread counts per relevance, items no feed has listed for 90 days are removed. The page always reads the cache and shows the last successful update. | `threat_intel/store.py` |
 | 4 | `ProjectRegistry` (name, folder, optional site address), `InventoryBuilder` on the existing manifest parsers, `ScanSummaryLookup` for the latest entry of the scan history. | `threat_intel/projects.py` |
 | 5 | `RelevanceMatcher`: AFFECTS_YOU when a CVE id leads to a local OSV advisory whose range contains an installed version; POSSIBLE when only a vendor or product name matches; GENERAL otherwise. Uses `OSVDatabase` and `VersionMatcher`, nothing is duplicated. | `threat_intel/relevance.py` |
@@ -25,6 +25,18 @@ Feed addresses, checked on 2026-11-16 against the publishers' own pages:
 - The Hacker News: `https://feeds.feedburner.com/TheHackersNews`
 - BSI CERT-Bund: `https://wid.cert-bund.de/content/public/securityAdvisory/rss`
 
+### Gap fixes (branch `fix/threat-feed-gaps`)
+
+| Fix | Change | Main files |
+|-----|--------|-----------|
+| 1 | The whole CISA catalog is kept and matched. Before, only the newest 200 entries were, so an old exploited vulnerability in a project was never flagged. `CisaKevSource.MAX_ITEMS` is 5000; news sources keep 200. A catalog entry older than 30 days is stored as a background item (`items.background`): it is matched like every other item, but it is not counted as new, as unread or in the sidebar badge until it affects a project. More than three alarms in one pass become one CRITICAL alarm (`TF002`) with the count and the first three by name. `feed.db` files of the first version get the new column on start. | `threat_intel/sources.py`, `threat_intel/store.py`, `threat_intel/service.py`, `threat_intel/alarms.py` |
+| 1 (page) | "All" shows 200 items per page, newest first, with "Show more" for the next page. "For you" lists every item that affects a project first, whatever its age, then the guesses. Rows are built in batches from plain Tk widgets inside one card frame; a page of 200 rows draws in about 3 s (about 15 s before). | `gui/pages/threat_feed_page.py`, `threat_intel/hub.py` |
+| 2 | `CheckState`: the "For you" tab, the digest line (page and status bar) and the feed column of My Projects say "Not checked: ..." with the reason while the feed is off, was never downloaded, reached no source, has no projects, or the OSV database is missing. "Nothing affects your projects" is shown only after a real check. | `threat_intel/hub.py`, `threat_intel/digest.py`, `gui/pages/threat_feed_page.py`, `gui/pages/projects_page.py` |
+| 3 | Feed downloads refuse every address that is not globally routable. This adds 100.64.0.0/10 (carrier NAT, Tailscale). | `threat_intel/fetcher.py` |
+| 4 | First-run dialog: "Switch on" has a visible border, and the window is as high as its content. | `gui/threat_feed_dialogs.py` |
+
+Tests after the gap fixes: 1219 passing, 5 skipped. Type check: 0 errors.
+
 ### Known limits
 
 - Name matching for KEV entries (vendor / product against package names) is approximate. It is shown as "possible match, verify" and never alarms.
@@ -34,7 +46,12 @@ Feed addresses, checked on 2026-11-16 against the publishers' own pages:
 - A feed with a DOCTYPE is rejected as a whole.
 - The same CVE reported by two sources is two items, so it can alarm twice.
 - Uptime checks run for every project with a site address, also while the feed is switched off.
-- Feed downloads refuse hosts that resolve to loopback, private, link-local, reserved, multicast or unspecified addresses, also after a redirect. The address is resolved once for the check and again by the connection, so a DNS answer that changes in between is not caught. Uptime checks are not limited this way, because the user's own site can be a local dev server.
+- A catalog entry counts as background by its date alone (older than 30 days when it first arrives), not only on the very first refresh. After a long break the entries added in between arrive silently too; they are still matched and still alarm when they affect a project.
+- More than three alarms at once are announced as one alarm that names three of them. The rest is listed in the "For you" tab only.
+- "Checked" means that the last refresh reached at least one source. When only the CISA catalog fails and the news feeds answer, the page still counts as checked; the failing source is shown in the Sources tab and in the status bar.
+- A page of the list holds at most 200 rows, because Tk cannot scroll a frame higher than 32767 pixels. With more than 200 items that affect projects, the rest is on the next page.
+- The rows of the feed list are plain Tk widgets, so they do not follow a change of the display scaling while the app is open.
+- Feed downloads refuse hosts that resolve to any address that is not globally routable (loopback, private, carrier NAT, link-local, reserved, multicast, unspecified), also after a redirect. The address is resolved once for the check and again by the connection, so a DNS answer that changes in between is not caught. Uptime checks are not limited this way, because the user's own site can be a local dev server.
 - Links with user info before the host (`https://user:pw@host/`) are refused everywhere `SafeUrl` is used: feed items, the link opener, the digest and project site addresses. A site that needs basic auth in its URL cannot be monitored.
 
 ### Notes for the next build

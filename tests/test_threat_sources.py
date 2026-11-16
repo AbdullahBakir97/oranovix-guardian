@@ -68,7 +68,7 @@ def test_kev_ransomware_entry_is_critical_and_html_is_stripped() -> None:
     assert gateway.title == "CVE-2099-1111: Example Corp Gateway Authentication Bypass Vulnerability"
 
 
-def test_kev_keeps_only_the_newest_entries() -> None:
+def test_kev_keeps_all_entries_newest_first() -> None:
     entries = ",".join(
         '{"cveID": "CVE-2099-%04d", "vulnerabilityName": "n", "dateAdded": "2026-%02d-%02d"}'
         % (number, 1 + number % 12, 1 + number % 28)
@@ -78,7 +78,7 @@ def test_kev_keeps_only_the_newest_entries() -> None:
 
     items = kev().fetch(FakeFetcher({CisaKevSource.URL: body}))
 
-    assert len(items) == 200
+    assert len(items) == 300
     assert items[0].published is not None and items[-1].published is not None
     assert items[0].published >= items[-1].published
 

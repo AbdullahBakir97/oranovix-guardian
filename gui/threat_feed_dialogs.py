@@ -30,7 +30,7 @@ class FeedConsentDialog(ctk.CTkToplevel):
         self.choice: Optional[bool] = None
 
         self.title(lm.t("tf_consent_title"))
-        self.geometry(f"500x{250 + 18 * len(hosts)}")
+        # No fixed size: the window is as high as its text and buttons.
         self.resizable(False, False)
         self.configure(fg_color=tm.c("bg"))
         self.transient(master.winfo_toplevel())
@@ -46,7 +46,7 @@ class FeedConsentDialog(ctk.CTkToplevel):
         ).pack(fill="x", padx=20, pady=(0, 14))
 
         buttons = ctk.CTkFrame(self, fg_color="transparent")
-        buttons.pack(fill="x", padx=20, pady=(0, 16), side="bottom")
+        buttons.pack(fill="x", padx=20, pady=(0, 16))
         # Keeping it off is the default: it has the focus and answers Enter.
         off_btn = ctk.CTkButton(
             buttons, text=lm.t("tf_consent_no"), width=140, height=30, corner_radius=6,
@@ -56,7 +56,8 @@ class FeedConsentDialog(ctk.CTkToplevel):
         off_btn.pack(side="right")
         ctk.CTkButton(
             buttons, text=lm.t("tf_consent_yes"), width=140, height=30, corner_radius=6,
-            fg_color=tm.c("bg3"), hover_color=tm.c("hover"), text_color=tm.c("text2"),
+            fg_color=tm.c("bg3"), hover_color=tm.c("hover"), text_color=tm.c("text"),
+            border_width=1, border_color=tm.c("accent"),
             font=ctk.CTkFont(size=11), command=lambda: self._answer(True),
         ).pack(side="right", padx=(0, 8))
 

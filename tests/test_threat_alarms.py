@@ -88,7 +88,10 @@ def test_refresh_stores_and_matches_items(rig: Rig) -> None:
 
     report = rig.service.refresh()
 
-    assert len(report.new_items) == 6 and report.sources_ok == 2 and report.failures == ()
+    # One catalog entry of the fixture is older than 30 days: stored, but not news.
+    assert len(report.new_items) == 5 and report.background_items == 1
+    assert report.sources_ok == 2 and report.failures == ()
+    assert rig.store.count() == 6
     for_you = rig.store.items([Relevance.AFFECTS_YOU])
     assert {s.item.source for s in for_you} == {"CISA KEV", "Example News"}     # both name the CVE
     assert all(s.matches[0].project == "Shop" for s in for_you)
@@ -119,7 +122,7 @@ def test_one_failing_source_does_not_stop_the_others(rig: Rig) -> None:
 
     report = rig.service.refresh()
 
-    assert report.sources_ok == 1 and len(report.new_items) == 3
+    assert report.sources_ok == 1 and len(report.new_items) == 2 and rig.store.count() == 3
     assert len(report.failures) == 1 and report.failures[0].startswith("Example News:")
     assert not report.offline
     health = {config.name: state for config, state in rig.service.source_health()}

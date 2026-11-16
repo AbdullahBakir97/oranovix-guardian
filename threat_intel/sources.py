@@ -36,7 +36,7 @@ def utc_now() -> datetime:
 class DownloadedFeedSource(FeedSource):
     """A source that is one https download; subclasses only parse the body."""
 
-    MAX_ITEMS = 200
+    MAX_ITEMS = 200         # news: only the newest headlines matter
 
     def __init__(self, name: str, url: str, language: str = "en", clock: Clock = utc_now) -> None:
         super().__init__(name, url, language)
@@ -105,6 +105,8 @@ class CisaKevSource(DownloadedFeedSource):
     NAME = "CISA KEV"
     URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
     DETAIL_URL = "https://nvd.nist.gov/vuln/detail/{cve}"
+    # The whole catalog is kept: an entry from years ago can still hit a project.
+    MAX_ITEMS = 5000
 
     _CVE = re.compile(r"^CVE-\d{4}-\d{4,7}$")
 
@@ -123,7 +125,7 @@ class CisaKevSource(DownloadedFeedSource):
             raise FeedError("The catalog has no list of vulnerabilities.")
 
         items = [item for entry in entries for item in [self._item(entry)] if item is not None]
-        # The catalog holds every entry since 2021; only the newest are kept.
+        # Newest first, so the cap would drop the oldest entries.
         items.sort(key=lambda item: item.published or datetime.min.replace(tzinfo=timezone.utc),
                    reverse=True)
         return items

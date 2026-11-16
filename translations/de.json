@@ -292,7 +292,6 @@
   "tf_no_projects_hint": "F\u00fcgen Sie Ihre Projekte auf der Seite Meine Projekte hinzu, um zu sehen, was Sie betrifft.",
   "tf_db_missing": "Die Schwachstellen-Datenbank fehlt, Treffer k\u00f6nnen daher nicht best\u00e4tigt werden. In den Einstellungen aktualisieren.",
   "tf_refresh_failed": "{count} Quelle(n) fehlgeschlagen",
-  "tf_more_items": "{count} weitere Eintr\u00e4ge nicht angezeigt",
   "tf_open_title": "Link \u00f6ffnen?",
   "tf_open_text": "Dies \u00f6ffnet {host} in Ihrem Browser.",
   "tf_open_yes": "\u00d6ffnen",
@@ -359,5 +358,18 @@
   "digest_fix": "behoben in {version}",
   "digest_projects": "Ihre Projekte",
   "digest_project_line": "{name}: {count} Eintr\u00e4ge betreffen es",
-  "digest_project_clear": "{name}: nichts Neues betrifft es"
+  "digest_project_clear": "{name}: nichts Neues betrifft es",
+  "tf_show_more": "Mehr anzeigen ({count} \u00e4ltere nicht angezeigt)",
+  "tf_alarm_many": "{count} aktiv ausgenutzte Schwachstellen betreffen Ihre Projekte",
+  "tf_alarm_many_mixed": "{count} aktiv ausgenutzte oder kritische Schwachstellen betreffen Ihre Projekte",
+  "tf_alarm_many_line": "{project}: {package} {version} ({advisory})",
+  "tf_alarm_many_more": "und {count} weitere",
+  "tf_alarm_many_fix": "\u00d6ffnen Sie den Threat-Feed, Reiter \"F\u00fcr Sie\", und aktualisieren Sie die genannten Pakete.",
+  "tf_not_checked_off": "Nicht gepr\u00fcft: Der Threat-Feed ist ausgeschaltet.",
+  "tf_not_checked_never": "Noch nicht gepr\u00fcft: Der Feed wurde noch nicht heruntergeladen.",
+  "tf_not_checked_unreachable": "Nicht gepr\u00fcft: Keine Quelle war erreichbar. Gespeicherte Eintr\u00e4ge werden angezeigt.",
+  "tf_not_checked_no_projects": "Nicht gepr\u00fcft: F\u00fcgen Sie Ihre Projekte auf der Seite Meine Projekte hinzu.",
+  "tf_not_checked_no_database": "Nicht gepr\u00fcft: Aktualisieren Sie die Schwachstellen-Datenbank in den Einstellungen.",
+  "proj_feed_unchecked": "Nicht gepr\u00fcft",
+  "tf_show_newest": "Zur\u00fcck zur ersten Seite"
 }
