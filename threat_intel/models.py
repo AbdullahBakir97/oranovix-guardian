@@ -122,6 +122,42 @@ class FeedItem:
 
 
 @dataclass(frozen=True)
+class ProjectMatch:
+    """Why an item concerns one project: which package matched, and how."""
+
+    project: str
+    project_path: str
+    package: str
+    ecosystem: str = ""
+    version: str = ""               # installed version; "" when it is not pinned
+    advisory_id: str = ""           # the local OSV advisory; "" for a name-only match
+    severity: Optional[Severity] = None
+    fixed_version: str = ""
+    file_path: str = ""             # manifest that declares the package
+    line: int = 0
+
+    @property
+    def confirmed(self) -> bool:
+        """True when a local advisory covers the installed version."""
+        return bool(self.advisory_id)
+
+
+@dataclass(frozen=True)
+class StoredItem:
+    """A feed item as kept in the local store."""
+
+    item: FeedItem
+    first_seen: datetime
+    read: bool = False
+    relevance: Relevance = Relevance.GENERAL
+    matches: Tuple[ProjectMatch, ...] = ()
+
+    @property
+    def id(self) -> str:
+        return self.item.id
+
+
+@dataclass(frozen=True)
 class SourceHealth:
     """When a source last worked and what went wrong last."""
 
