@@ -284,5 +284,7 @@
   "tf_alarm_exploited": "Exploited vulnerability affects {project}: {package} {version} ({advisory})",
   "tf_alarm_critical": "Critical vulnerability affects {project}: {package} {version} ({advisory})",
   "tf_alarm_fix": "Upgrade to {version} or later.",
-  "tf_alarm_fix_unknown": "No fixed version is known yet. Follow the advisory."
+  "tf_alarm_fix_unknown": "No fixed version is known yet. Follow the advisory.",
+  "up_alarm_down": "Site down: {url} ({project}), {count} failed checks in a row",
+  "up_alarm_advice": "Check the server and the hosting status."
 }

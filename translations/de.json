@@ -260,5 +260,7 @@
   "tf_alarm_exploited": "Aktiv ausgenutzte Schwachstelle betrifft {project}: {package} {version} ({advisory})",
   "tf_alarm_critical": "Kritische Schwachstelle betrifft {project}: {package} {version} ({advisory})",
   "tf_alarm_fix": "Auf {version} oder neuer aktualisieren.",
-  "tf_alarm_fix_unknown": "Noch keine korrigierte Version bekannt. Dem Sicherheitshinweis folgen."
+  "tf_alarm_fix_unknown": "Noch keine korrigierte Version bekannt. Dem Sicherheitshinweis folgen.",
+  "up_alarm_down": "Website nicht erreichbar: {url} ({project}), {count} fehlgeschlagene Pr\u00fcfungen in Folge",
+  "up_alarm_advice": "Server und Hosting-Status pr\u00fcfen."
 }
