@@ -255,5 +255,6 @@
   "ld_resume_no": "Nicht jetzt",
   "language_file": "Datei",
   "ld_baseline_suspicious": "{count} Dateien wirken verd\u00e4chtig und wurden nicht in den Referenzstand aufgenommen:",
-  "ld_baseline_suspicious_more": "... und {count} weitere (siehe Ereignisliste)"
+  "ld_baseline_suspicious_more": "... und {count} weitere (siehe Ereignisliste)",
+  "proj_site_notice": "Nur eigene Websites hinzuf\u00fcgen."
 }

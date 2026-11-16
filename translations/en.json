@@ -279,5 +279,6 @@
   "ld_resume_no": "Not now",
   "language_file": "File",
   "ld_baseline_suspicious": "{count} files look suspicious and were left out of the baseline:",
-  "ld_baseline_suspicious_more": "... and {count} more (see the events list)"
+  "ld_baseline_suspicious_more": "... and {count} more (see the events list)",
+  "proj_site_notice": "Only add sites you own."
 }
