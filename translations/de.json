@@ -256,5 +256,9 @@
   "language_file": "Datei",
   "ld_baseline_suspicious": "{count} Dateien wirken verd\u00e4chtig und wurden nicht in den Referenzstand aufgenommen:",
   "ld_baseline_suspicious_more": "... und {count} weitere (siehe Ereignisliste)",
-  "proj_site_notice": "Nur eigene Websites hinzuf\u00fcgen."
+  "proj_site_notice": "Nur eigene Websites hinzuf\u00fcgen.",
+  "tf_alarm_exploited": "Aktiv ausgenutzte Schwachstelle betrifft {project}: {package} {version} ({advisory})",
+  "tf_alarm_critical": "Kritische Schwachstelle betrifft {project}: {package} {version} ({advisory})",
+  "tf_alarm_fix": "Auf {version} oder neuer aktualisieren.",
+  "tf_alarm_fix_unknown": "Noch keine korrigierte Version bekannt. Dem Sicherheitshinweis folgen."
 }
