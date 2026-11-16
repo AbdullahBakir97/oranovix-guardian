@@ -315,7 +315,10 @@ def test_all_tab_pages_through_the_catalog_and_for_you_lists_the_old_hit(
     dates = [stored.item.published for stored in everything if stored.item.published]
     assert dates == sorted(dates, reverse=True)         # the newest 200
     assert DJANGO_CVE not in {cve for stored in everything for cve in stored.item.cve_ids}
-    assert len(hub.items(for_you=False, limit=400)) == 400
+    second_page = hub.items(for_you=False, offset=200)
+    assert len(second_page) == 200 and {s.id for s in second_page}.isdisjoint(s.id for s in everything)
+    assert max(d for d in (s.item.published for s in second_page) if d) <= min(dates)
+    assert len(hub.items(for_you=False, offset=1400)) == 100    # the last page ends with the oldest
 
     (for_you,) = hub.items(for_you=True)
     assert for_you.item.cve_ids == (DJANGO_CVE,) and for_you.relevance is Relevance.AFFECTS_YOU

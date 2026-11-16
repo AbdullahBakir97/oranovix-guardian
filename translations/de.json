@@ -359,7 +359,7 @@
   "digest_projects": "Ihre Projekte",
   "digest_project_line": "{name}: {count} Eintr\u00e4ge betreffen es",
   "digest_project_clear": "{name}: nichts Neues betrifft es",
-  "tf_show_more": "Mehr anzeigen ({count} nicht angezeigt)",
+  "tf_show_more": "Mehr anzeigen ({count} \u00e4ltere nicht angezeigt)",
   "tf_alarm_many": "{count} aktiv ausgenutzte Schwachstellen betreffen Ihre Projekte",
   "tf_alarm_many_mixed": "{count} aktiv ausgenutzte oder kritische Schwachstellen betreffen Ihre Projekte",
   "tf_alarm_many_line": "{project}: {package} {version} ({advisory})",
@@ -370,5 +370,6 @@
   "tf_not_checked_unreachable": "Nicht gepr\u00fcft: Keine Quelle war erreichbar. Gespeicherte Eintr\u00e4ge werden angezeigt.",
   "tf_not_checked_no_projects": "Nicht gepr\u00fcft: F\u00fcgen Sie Ihre Projekte auf der Seite Meine Projekte hinzu.",
   "tf_not_checked_no_database": "Nicht gepr\u00fcft: Aktualisieren Sie die Schwachstellen-Datenbank in den Einstellungen.",
-  "proj_feed_unchecked": "Nicht gepr\u00fcft"
+  "proj_feed_unchecked": "Nicht gepr\u00fcft",
+  "tf_show_newest": "Zur\u00fcck zur ersten Seite"
 }

@@ -214,16 +214,18 @@ class ThreatStore:
         unread_only: bool = False,
         limit: int = 500,
         newest_first: bool = False,
+        offset: int = 0,
     ) -> List[StoredItem]:
         """Stored items, the ones that affect the user first, then newest first.
 
-        With *newest_first* the date alone decides the order.
+        With *newest_first* the date alone decides the order. *offset* skips
+        that many items, for the next page of a long list.
         """
         where, parameters = self._filter(relevances, unread_only)
         order = self._NEWEST if newest_first else self._ORDER
         rows = self._db.read(
-            f"SELECT {self._COLUMNS} FROM items {where} ORDER BY {order} LIMIT ?",
-            (*parameters, limit),
+            f"SELECT {self._COLUMNS} FROM items {where} ORDER BY {order} LIMIT ? OFFSET ?",
+            (*parameters, limit, max(0, offset)),
         )
         return [self._stored(row) for row in rows]
 

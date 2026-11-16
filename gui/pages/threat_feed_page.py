@@ -8,7 +8,9 @@ sends, so the window never waits for the network.
 """
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+import tkinter as tk
+from tkinter import font as tkfont
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import customtkinter as ctk
 
@@ -24,6 +26,9 @@ class ThreatFeedPage(ctk.CTkFrame):
     """Sidebar page "Threat Feed" with the tabs For you, All and Sources."""
 
     TABS = ("for_you", "all", "sources")
+    BATCH = 20          # rows built per step; a long list must not freeze the window
+    # Tk cannot scroll a frame higher than 32767 pixels. A page ends before that.
+    MAX_LIST_HEIGHT = 26000
 
     _BADGE_COLORS = {
         Relevance.AFFECTS_YOU: "critical",
@@ -41,10 +46,14 @@ class ThreatFeedPage(ctk.CTkFrame):
         super().__init__(master, fg_color=tm.c("bg"), corner_radius=0, **kwargs)
         self._hub = hub
         self._tab = "for_you"
-        # Rows per tab; "Show more" adds another page.
-        self._limits: Dict[str, int] = {"for_you": hub.PAGE_SIZE, "all": hub.PAGE_SIZE}
+        # First row of the page shown in each tab; "Show more" turns the page.
+        self._offsets: Dict[str, int] = {"for_you": 0, "all": 0}
         self._state: Optional[HubState] = None
         self._shown_key: Tuple[object, ...] = ()
+        self._shown_rows = 0
+        self._fill_run = 0          # changes whenever the list is rebuilt
+        self._scaling = ctk.ScalingTracker.get_widget_scaling(self)
+        self._fonts: Dict[Tuple[int, bool], tkfont.Font] = {}
         self._build()
         hub.add_listener(self._show_state)
         self._show_state(hub.state())
@@ -215,11 +224,8 @@ class ThreatFeedPage(ctk.CTkFrame):
             return
 
         for_you = self._tab == "for_you"
-        items = self._hub.items(for_you, self._limits[self._tab])
-        hidden = self._hub.item_count(for_you) - len(items)
         state = self._state or self._hub.state()
-        key = (self._tab, hidden, state.check,
-               tuple((i.id, i.read, i.relevance, i.matches) for i in items))
+        items, total, key = self._list_content(state)
         if key == self._shown_key and not force:
             return
         self._shown_key = key
@@ -229,22 +235,69 @@ class ThreatFeedPage(ctk.CTkFrame):
         )
 
         tm = ThemeManager()
-        lm = LanguageManager()
-        if not items:
+        offset = self._offsets[self._tab]
+        if not items and not offset:
             empty = self.empty_text(state, for_you)
             ctk.CTkLabel(self._list, text=empty, font=ctk.CTkFont(size=12),
                          text_color=tm.c("text3"), wraplength=700).pack(pady=28)
             return
-        for item in items:
-            self._item_row(item)
-        if hidden > 0:
+        if offset:
             self._button(
-                self._list, lm.t("tf_show_more", count=hidden), self._show_more, primary=False
-            ).pack(pady=8)
+                self._list, LanguageManager().t("tf_show_newest"), self._show_newest, primary=False
+            ).pack(pady=(0, 8))
+        self._fill(self._fill_run, items, 0, total - offset)
+
+    def _list_content(self, state: HubState) -> Tuple[List[StoredItem], int, Tuple[object, ...]]:
+        """Items of the current page, the size of the whole tab, and a key for "unchanged"."""
+        for_you = self._tab == "for_you"
+        offset = self._offsets[self._tab]
+        items = self._hub.items(for_you, self._hub.PAGE_SIZE, offset)
+        total = self._hub.item_count(for_you)
+        key = (self._tab, offset, total, state.check,
+               tuple((i.id, i.read, i.relevance, i.matches) for i in items))
+        return items, total, key
+
+    def _fill(self, run: int, items: Sequence[StoredItem], start: int, available: int) -> None:
+        """Build the next rows, then come back for the rest.
+
+        Each batch sits in its own frame that is shown when complete, so the
+        scroll area is laid out once per batch and not once per widget.
+        *available* is how many items the tab has from this page on.
+        """
+        try:
+            if run != self._fill_run or not self.winfo_exists():
+                return
+            self._list.update_idletasks()
+            full = start > 0 and self._list.winfo_reqheight() > self.MAX_LIST_HEIGHT
+            end = start if full else min(start + self.BATCH, len(items))
+            batch = ctk.CTkFrame(self._list, fg_color="transparent")
+            for item in items[start:end]:
+                self._item_row(batch, item)
+            last = full or end >= len(items)
+            if last and available > end:
+                self._button(
+                    batch, LanguageManager().t("tf_show_more", count=available - end),
+                    self._show_more, primary=False,
+                ).pack(pady=8)
+            batch.pack(fill="x")
+            self._shown_rows = end
+            if not last:
+                self.after(1, self._fill, run, items, end, available)
+        except tk.TclError:
+            pass        # the page was rebuilt meanwhile
 
     def _show_more(self) -> None:
-        self._limits[self._tab] += self._hub.PAGE_SIZE
+        """The next, older page."""
+        self._offsets[self._tab] += self._shown_rows
+        self._turn_page()
+
+    def _show_newest(self) -> None:
+        self._offsets[self._tab] = 0
+        self._turn_page()
+
+    def _turn_page(self) -> None:
         self._render(force=True)
+        self._list._parent_canvas.yview_moveto(0)
 
     @staticmethod
     def empty_text(state: HubState, for_you: bool) -> str:
@@ -257,65 +310,96 @@ class ThreatFeedPage(ctk.CTkFrame):
         return lm.t(state.check.text_key)
 
     def _clear(self) -> None:
+        self._fill_run += 1         # a fill that is still running stops
+        self._shown_rows = 0
         for child in self._list.winfo_children():
             child.destroy()
 
-    def _item_row(self, stored: StoredItem) -> None:
+    def _item_row(self, master, stored: StoredItem) -> None:
+        """One card. Only the card itself is a CTk widget; its content is plain Tk.
+
+        A CTk widget costs several milliseconds to draw, and a page has up
+        to 200 rows of about ten widgets.
+        """
         tm = ThemeManager()
         lm = LanguageManager()
-        side, far = lm.pack_side, lm.opposite_side
+        # Tk wants literals; the language manager hands out plain strings.
+        side: Any = lm.pack_side
+        far: Any = lm.opposite_side
+        justify: Any = lm.text_justify
+        anchor: Any = lm.text_anchor
         item = stored.item
+        px = self._px
+        card = tm.c("card")
 
-        row = ctk.CTkFrame(self._list, fg_color=tm.c("card"), corner_radius=8,
+        row = ctk.CTkFrame(master, fg_color=card, corner_radius=8,
                            border_width=1, border_color=tm.c("border"))
         row.pack(fill="x", pady=3, padx=(0, 6))
 
-        top = ctk.CTkFrame(row, fg_color="transparent")
-        top.pack(fill="x", padx=10, pady=(8, 0))
-        ctk.CTkLabel(
-            top, text=f" {self.badge_text(stored.relevance)} ", corner_radius=4,
-            fg_color=tm.c(self._BADGE_COLORS[stored.relevance]), text_color="#ffffff",
-            font=ctk.CTkFont(size=9, weight="bold"),
-        ).pack(side=side)
+        top = tk.Frame(row, bg=card)
+        top.pack(fill="x", padx=px(10), pady=(px(8), 0))
+        self._tag(top, self.badge_text(stored.relevance),
+                  tm.c(self._BADGE_COLORS[stored.relevance])).pack(side=side)
         if item.is_known_exploited:
-            ctk.CTkLabel(
-                top, text=f" {lm.t('tf_exploited')} ", corner_radius=4,
-                fg_color=tm.c("high"), text_color="#ffffff",
-                font=ctk.CTkFont(size=9, weight="bold"),
-            ).pack(side=side, padx=4)
-        ctk.CTkLabel(
-            top, text=self.meta_text(stored), font=ctk.CTkFont(size=10),
-            text_color=tm.c("text3"), fg_color="transparent",
-        ).pack(side=side, padx=8)
+            self._tag(top, lm.t("tf_exploited"), tm.c("high")).pack(side=side, padx=px(4))
+        tk.Label(
+            top, text=self.meta_text(stored), font=self._font(10), bg=card, fg=tm.c("text3"),
+        ).pack(side=side, padx=px(8))
 
-        buttons = ctk.CTkFrame(top, fg_color="transparent")
-        buttons.pack(side=far)
         if not stored.read:
-            ctk.CTkButton(
-                buttons, text=lm.t("tf_mark_read"), width=84, height=22, corner_radius=4,
-                font=ctk.CTkFont(size=9), fg_color=tm.c("bg3"), hover_color=tm.c("hover"),
-                text_color=tm.c("text2"), command=lambda i=stored.id: self._mark_read(i),
-            ).pack(side=far, padx=(4, 0))
-        ctk.CTkButton(
-            buttons, text=lm.t("tf_open_link"), width=84, height=22, corner_radius=4,
-            font=ctk.CTkFont(size=9), fg_color=tm.c("accent"), hover_color=tm.c("accent_h"),
-            text_color="#ffffff", command=lambda s=stored: self._open(s),
+            self._row_button(
+                top, lm.t("tf_mark_read"), lambda i=stored.id: self._mark_read(i),
+                tm.c("bg3"), tm.c("hover"), tm.c("text2"),
+            ).pack(side=far, padx=(px(4), 0))
+        self._row_button(
+            top, lm.t("tf_open_link"), lambda s=stored: self._open(s),
+            tm.c("accent"), tm.c("accent_h"), "#ffffff",
         ).pack(side=far)
 
-        ctk.CTkLabel(
-            row, text=item.title, wraplength=720, justify=lm.text_justify, anchor=lm.text_anchor,
-            font=ctk.CTkFont(size=12, weight="normal" if stored.read else "bold"),
-            text_color=tm.c("text2") if stored.read else tm.c("text"), fg_color="transparent",
-        ).pack(fill="x", padx=10, pady=(4, 0 if self.match_lines(stored) else 9))
-
         lines = self.match_lines(stored)
+        tk.Label(
+            row, text=item.title, wraplength=px(720), justify=justify, anchor=anchor,
+            font=self._font(12, bold=not stored.read), bg=card,
+            fg=tm.c("text2") if stored.read else tm.c("text"),
+        ).pack(fill="x", padx=px(10), pady=(px(4), 0 if lines else px(9)))
+
         if lines:
             color = tm.c("critical") if stored.relevance is Relevance.AFFECTS_YOU else tm.c("warning")
-            ctk.CTkLabel(
-                row, text="\n".join(lines), wraplength=720, justify=lm.text_justify,
-                anchor=lm.text_anchor, font=ctk.CTkFont(size=10, weight="bold"),
-                text_color=color, fg_color="transparent",
-            ).pack(fill="x", padx=10, pady=(2, 9))
+            tk.Label(
+                row, text="\n".join(lines), wraplength=px(720), justify=justify,
+                anchor=anchor, font=self._font(10, bold=True), bg=card, fg=color,
+            ).pack(fill="x", padx=px(10), pady=(px(2), px(9)))
+
+    def _px(self, value: float) -> int:
+        """Plain Tk widgets do not follow the display scaling on their own."""
+        return round(value * self._scaling)
+
+    def _font(self, size: int, bold: bool = False) -> tkfont.Font:
+        key = (size, bold)
+        if key not in self._fonts:
+            self._fonts[key] = tkfont.Font(
+                family=ctk.CTkFont(size=size).cget("family"), size=-self._px(size),
+                weight="bold" if bold else "normal",
+            )
+        return self._fonts[key]
+
+    def _tag(self, master, text: str, color: str) -> tk.Label:
+        return tk.Label(
+            master, text=text, bg=color, fg="#ffffff", font=self._font(9, bold=True),
+            padx=self._px(6), pady=self._px(2),
+        )
+
+    def _row_button(
+        self, master, text: str, command: Callable[[], None], color: str, hover: str, text_color: str,
+    ) -> tk.Label:
+        button = tk.Label(
+            master, text=text, bg=color, fg=text_color, font=self._font(9), cursor="hand2",
+            padx=self._px(12), pady=self._px(4),
+        )
+        button.bind("<Button-1>", lambda _event: command())
+        button.bind("<Enter>", lambda _event: button.configure(bg=hover))
+        button.bind("<Leave>", lambda _event: button.configure(bg=color))
+        return button
 
     @staticmethod
     def badge_text(relevance: Relevance) -> str:

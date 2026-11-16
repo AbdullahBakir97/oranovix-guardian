@@ -202,17 +202,17 @@ class ThreatIntelHub:
             has_projects=bool(self._registry.list()),
         )
 
-    def items(self, for_you: bool, limit: int = PAGE_SIZE) -> List[StoredItem]:
-        """Items of a tab.
+    def items(self, for_you: bool, limit: int = PAGE_SIZE, offset: int = 0) -> List[StoredItem]:
+        """One page of a tab.
 
-        "For you" always holds every item that affects a project, whatever
-        its age, followed by at most *limit* guesses. "All" is the newest
-        *limit* items.
+        "All" is every item, newest first. "For you" is every item that
+        affects a project, whatever its age, followed by the guesses.
         """
         if not for_you:
-            return self._store.items(limit=limit, newest_first=True)
-        affecting = self._store.items([Relevance.AFFECTS_YOU], limit=100000)
-        return affecting + self._store.items([Relevance.POSSIBLE], limit=limit)
+            return self._store.items(limit=limit, newest_first=True, offset=offset)
+        return self._store.items(
+            [Relevance.AFFECTS_YOU, Relevance.POSSIBLE], limit=limit, offset=offset
+        )
 
     def item_count(self, for_you: bool) -> int:
         """How many items the tab has in the store, shown or not."""
