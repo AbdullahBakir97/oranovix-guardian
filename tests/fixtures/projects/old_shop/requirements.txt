@@ -1,0 +1,4 @@
+# web shop, not updated for years
+Django==2.2.0
+requests>=2.0
+example-archive-tool==1.4.2

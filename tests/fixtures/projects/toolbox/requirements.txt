@@ -1,0 +1,2 @@
+Lodash-Enterprise-Gateway==3.1.0
+flask==3.0.0

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Advisories</title>
+  <link href="https://advisories.example.org/"/>
+  <link rel="self" href="https://advisories.example.org/atom.xml"/>
+  <updated>2026-11-16T10:00:00Z</updated>
+  <id>urn:example:advisories</id>
+  <entry>
+    <title type="html">lodash &amp;lt;b&amp;gt;prototype pollution&amp;lt;/b&amp;gt; advisory</title>
+    <link rel="self" href="https://advisories.example.org/api/2001"/>
+    <link rel="alternate" type="text/html" href="https://advisories.example.org/2001"/>
+    <id>urn:example:advisory:2001</id>
+    <published>2026-11-14T08:30:00Z</published>
+    <updated>2026-11-15T08:30:00Z</updated>
+    <summary type="html">&lt;p&gt;Versions before 4.17.19 are affected (CVE-2099-0101, cve-2099-0102).&lt;/p&gt;</summary>
+  </entry>
+  <entry>
+    <title>Entry with xhtml content</title>
+    <link href="https://advisories.example.org/2002"/>
+    <id>urn:example:advisory:2002</id>
+    <updated>2026-11-13T12:00:00+01:00</updated>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>Short <b>note</b>.</p></div></content>
+  </entry>
+</feed>

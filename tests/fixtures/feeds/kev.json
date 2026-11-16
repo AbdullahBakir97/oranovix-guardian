@@ -1,0 +1,52 @@
+{
+  "title": "CISA Catalog of Known Exploited Vulnerabilities",
+  "catalogVersion": "2026.11.13",
+  "dateReleased": "2026-11-13T15:00:12.4512Z",
+  "count": 5,
+  "vulnerabilities": [
+    {
+      "cveID": "CVE-2019-14234",
+      "vendorProject": "Django",
+      "product": "Django",
+      "vulnerabilityName": "Django SQL Injection Vulnerability",
+      "dateAdded": "2026-11-10",
+      "shortDescription": "Django contains an SQL injection vulnerability in key and index lookups for JSONField.",
+      "requiredAction": "Apply mitigations per vendor instructions.",
+      "dueDate": "2026-12-01",
+      "knownRansomwareCampaignUse": "Unknown",
+      "notes": "https://www.djangoproject.com/weblog/2019/aug/01/security-releases/"
+    },
+    {
+      "cveID": "CVE-2099-1111",
+      "vendorProject": "Example Corp",
+      "product": "Lodash Enterprise Gateway",
+      "vulnerabilityName": "Example Corp Gateway <b>Authentication</b> Bypass Vulnerability",
+      "dateAdded": "2026-11-12",
+      "shortDescription": "The gateway allows an unauthenticated attacker to bypass authentication.",
+      "requiredAction": "Apply updates.",
+      "dueDate": "2026-12-03",
+      "knownRansomwareCampaignUse": "Known",
+      "notes": ""
+    },
+    {
+      "cveID": "CVE-2099-2222",
+      "vendorProject": "Contoso",
+      "product": "Multiple Products",
+      "vulnerabilityName": "Contoso Router Command Injection Vulnerability",
+      "dateAdded": "2026-10-01",
+      "shortDescription": "Contoso routers contain a command injection vulnerability.",
+      "requiredAction": "Apply updates.",
+      "dueDate": "2026-10-22",
+      "knownRansomwareCampaignUse": "Unknown",
+      "notes": ""
+    },
+    {
+      "cveID": "not-a-cve",
+      "vendorProject": "Broken",
+      "product": "Entry",
+      "vulnerabilityName": "Entry without a valid id",
+      "dateAdded": "2026-11-13"
+    },
+    "not an object"
+  ]
+}

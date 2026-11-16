@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Example Security News</title>
+    <link>https://news.example.org</link>
+    <atom:link href="https://news.example.org/feed/" rel="self" type="application/rss+xml"/>
+    <description>Fixture feed</description>
+    <item>
+      <title>Django fixes &lt;em&gt;SQL injection&lt;/em&gt; exploited in the wild</title>
+      <link>https://news.example.org/django-sql-injection</link>
+      <guid isPermaLink="false">news-1001</guid>
+      <pubDate>Mon, 16 Nov 2026 09:42:04 GMT</pubDate>
+      <description><![CDATA[<p>Attackers exploit <a href="https://evil.example/x">CVE-2019-14234</a> in Django.</p><script>alert('x')</script><img src="x" onerror="alert(1)">]]></description>
+      <content:encoded><![CDATA[<p>The full article text must never be copied into the app.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>[UPDATE] [hoch] Linux Kernel: Mehrere Schwachstellen</title>
+      <link>https://news.example.org/kernel</link>
+      <pubDate>Sun, 15 Nov 2026 18:04:21 +0530</pubDate>
+      <description>Ein Angreifer kann mehrere Schwachstellen ausnutzen.</description>
+    </item>
+    <item>
+      <title>Click here</title>
+      <link>javascript:alert(document.cookie)</link>
+      <guid>news-1003</guid>
+      <description>An entry whose link is not a web link.</description>
+    </item>
+    <item>
+      <title>Plain http link</title>
+      <link>http://news.example.org/old</link>
+      <guid>news-1004</guid>
+      <pubDate>not a date</pubDate>
+    </item>
+    <item>
+      <link>https://news.example.org/untitled</link>
+      <guid>news-1005</guid>
+    </item>
+  </channel>
+</rss>
