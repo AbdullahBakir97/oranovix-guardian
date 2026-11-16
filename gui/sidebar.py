@@ -69,10 +69,31 @@ class NavItem(ctk.CTkFrame):
         )
         self._text_lbl.pack(side="left", fill="x", expand=True)
 
+        # Count badge, shown only while there is something to count.
+        self._badge_lbl = ctk.CTkLabel(
+            self,
+            text="",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            text_color="#ffffff",
+            fg_color=tm.c("accent"),
+            corner_radius=8,
+            width=22,
+            height=18,
+        )
+
         self._bind_all()
 
+    def set_badge(self, count: int) -> None:
+        """Show *count* beside the label; hide the badge when it is zero."""
+        if count <= 0:
+            self._badge_lbl.pack_forget()
+            return
+        self._badge_lbl.configure(text="99+" if count > 99 else str(count))
+        if not self._badge_lbl.winfo_ismapped():
+            self._badge_lbl.pack(side="right", padx=(0, 8), before=self._text_lbl)
+
     def _bind_all(self) -> None:
-        for w in (self, self._icon_lbl, self._text_lbl):
+        for w in (self, self._icon_lbl, self._text_lbl, self._badge_lbl):
             w.bind("<ButtonRelease-1>", self._click)
             w.bind("<Enter>",           self._hover_enter)
             w.bind("<Leave>",           self._hover_leave)
@@ -172,6 +193,8 @@ class Sidebar(ctk.CTkFrame):
         ("🏠", "nav_dashboard", "dashboard"),
         ("🔍", "nav_scanner",   "scanner"),
         ("🛡", "nav_live_defense", "live_defense"),
+        ("📡", "nav_threat_feed", "threat_feed"),
+        ("📁", "nav_projects",  "projects"),
         ("📊", "nav_reports",   "reports"),
         ("⚙️",  "nav_settings",  "settings"),
     ]
@@ -240,6 +263,8 @@ class Sidebar(ctk.CTkFrame):
             "nav_dashboard": "Dashboard",
             "nav_scanner":   "Scanner",
             "nav_live_defense": "Live Defense",
+            "nav_threat_feed": "Threat Feed",
+            "nav_projects":  "My Projects",
             "nav_reports":   "Reports",
             "nav_settings":  "Settings",
         }
@@ -291,6 +316,12 @@ class Sidebar(ctk.CTkFrame):
     def set_active(self, page_id: str) -> None:
         """Public API for app to update highlight without triggering callback."""
         self._highlight(page_id)
+
+    def set_badge(self, page_id: str, count: int) -> None:
+        """Show a count on the item of *page_id* (0 hides it)."""
+        item = self._items.get(page_id)
+        if item:
+            item.set_badge(count)
 
     def refresh_theme(self) -> None:
         tm = ThemeManager()

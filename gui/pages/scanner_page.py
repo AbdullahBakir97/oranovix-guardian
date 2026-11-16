@@ -611,6 +611,13 @@ class ScannerPage(ctk.CTkFrame):
         else:
             self._log.append(lm.t("no_scannable_files"), "error")
 
+    def scan_path(self, path: str) -> None:
+        """Select *path* and start the normal scan, as if the user had picked it."""
+        if self._scanning:
+            return
+        self._drop_zone._set_path(path)     # shows the name and selects the target
+        self._start_scan()
+
     @staticmethod
     def detected_languages_text(languages: List[Language], files: List[str]) -> str:
         """Languages of the target for the log; config files count as "Config"."""

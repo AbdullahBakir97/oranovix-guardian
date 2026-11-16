@@ -34,6 +34,8 @@ osv.db
 osv.db.new
 integrity.db
 integrity.db-journal
+feed.db
+feed.db-journal
 reports/output/
 
 # ── Secrets / local config ────────────────────────────────────────────────

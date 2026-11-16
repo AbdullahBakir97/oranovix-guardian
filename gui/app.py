@@ -49,6 +49,7 @@ from gui.status_bar        import StatusBar
 
 if TYPE_CHECKING:
     from live_defense.controller import LiveDefenseController, LiveDefenseState
+    from threat_intel.hub import HubState, ThreatIntelHub
 # gui.pages and scanner_engine are imported lazily inside methods
 # to keep startup fast (splash appears before heavy imports load)
 
@@ -96,6 +97,8 @@ class CodeGuardianApp(ctk.CTk):
         self._current_page:  str          = "scanner"
         self._scan_result:   Optional[object] = None
         self._live_defense:  Optional[LiveDefenseController] = None
+        self._threat_hub:    Optional[ThreatIntelHub] = None
+        self._feed_report_shown: Optional[object] = None
 
         # Register observers so theme/language changes trigger a rebuild.
         # These registrations persist across UI rebuilds because the
@@ -232,6 +235,7 @@ class CodeGuardianApp(ctk.CTk):
         # fully visible for SetWindowLongW to take effect reliably.
         self.after(100, self._restore_taskbar_entry)
         self.after(400, self._offer_live_defense_resume)
+        self.after(900, self._start_threat_feed)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -298,7 +302,10 @@ class CodeGuardianApp(ctk.CTk):
         ``"results"`` key is an alias for ``"dashboard"`` so that both
         IDs resolve to the same :class:`~gui.pages.ResultsPage` instance.
         """
-        from gui.pages import ScannerPage, ResultsPage, ReportsPage, SettingsPage, LiveDefensePage
+        from gui.pages import (
+            ScannerPage, ResultsPage, ReportsPage, SettingsPage, LiveDefensePage,
+            ThreatFeedPage, ProjectsPage,
+        )
 
         args = dict(master=self._content)
 
@@ -326,13 +333,24 @@ class CodeGuardianApp(ctk.CTk):
             on_status=self._status_bar.set_status,
             on_scan_result=self._on_scan_complete,
         )
+        hub = self._threat_intel_hub()
+        self._pages["threat_feed"] = ThreatFeedPage(**args, hub=hub)
+        self._pages["projects"] = ProjectsPage(
+            **args,
+            hub=hub,
+            on_status=self._status_bar.set_status,
+            on_scan=self._scan_project,
+            on_open_feed=lambda: self._navigate("threat_feed"),
+        )
         self._pages["reports"]  = ReportsPage(**args)
         self._pages["settings"] = SettingsPage(
             **args,
             on_theme_toggle=self._toggle_theme,
             on_lang_change=self._change_lang,
+            threat_hub=hub,
         )
         self._status_bar.set_monitoring(controller.is_running)
+        self._sidebar.set_badge("threat_feed", hub.store.unread_for_you())
 
     # ------------------------------------------------------------------
     # Live Defense
@@ -377,9 +395,63 @@ class CodeGuardianApp(ctk.CTk):
             self._status_bar.set_status(str(exc), "error")
         controller.notify()
 
+    # ------------------------------------------------------------------
+    # Threat Feed and My Projects
+    # ------------------------------------------------------------------
+
+    def _threat_intel_hub(self) -> ThreatIntelHub:
+        """The hub outlives UI rebuilds, like the Live Defense controller."""
+        if self._threat_hub is None:
+            from threat_intel.hub import ThreatIntelHub
+            self._threat_hub = ThreatIntelHub(
+                dispatch=lambda fn: self.after(0, fn),
+                alarm_center=self._alarm_center,
+            )
+            self._threat_hub.add_listener(self._on_threat_feed_state)
+        return self._threat_hub
+
+    def _on_threat_feed_state(self, state: HubState) -> None:
+        try:
+            self._sidebar.set_badge("threat_feed", state.unread_for_you)
+            report = state.last_report
+            if report is not None and not state.refreshing and report is not self._feed_report_shown:
+                self._feed_report_shown = report
+                if not report.disabled:
+                    self._show_feed_digest(len(report.failures))
+        except tk.TclError:
+            pass                # sidebar or status bar is being rebuilt
+
+    def _show_feed_digest(self, failed_sources: int = 0) -> None:
+        """Status bar: "Since your last visit: N new, M affect your projects"."""
+        hub = self._threat_intel_hub()
+        digest = hub.digest(hub.session_since)
+        text = digest.headline
+        if failed_sources:
+            text += "  ·  " + LanguageManager().t("tf_refresh_failed", count=failed_sources)
+        level = "warn" if digest.affecting_count or failed_sources else "info"
+        self._status_bar.set_status(text, level)
+
+    def _start_threat_feed(self) -> None:
+        """First run: ask before anything is downloaded. Then show what is new."""
+        from gui.threat_feed_dialogs import FeedConsentDialog
+        hub = self._threat_intel_hub()
+        if not hub.config().asked:
+            hub.answer_first_run(bool(FeedConsentDialog.ask(self, hub.hosts())))
+        hub.start()
+        # With the feed on, the line is shown again when the first refresh is done.
+        if hub.store.count():
+            self._show_feed_digest()
+
+    def _scan_project(self, path: str) -> None:
+        """"Scan now" of a project: the normal scan, started on the scanner page."""
+        self._navigate("scanner")
+        self._pages["scanner"].scan_path(path)
+
     def destroy(self) -> None:
         if self._live_defense is not None:
             self._live_defense.shutdown()
+        if self._threat_hub is not None:
+            self._threat_hub.shutdown()
         super().destroy()
 
     def _navigate(self, page_id: str) -> None:
@@ -398,6 +470,8 @@ class CodeGuardianApp(ctk.CTk):
         page = self._pages.get(page_id) or self._pages.get("scanner")
         if page:
             page.pack(fill="both", expand=True)
+            if hasattr(page, "on_shown"):
+                page.on_shown()
         self._current_page = page_id
 
         # Both "results" and "dashboard" map to the same sidebar button

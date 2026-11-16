@@ -24,7 +24,7 @@ Version: 1.1.0
 """
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 import os
 import threading
@@ -39,6 +39,9 @@ from core.sound_manager       import SoundManager
 from scanner_engine.deps.osv_db import OSVDatabase, OSVUpdateError
 from scanner_engine.gemini_config import GEMINI_API_KEY_ENV, GeminiConfig
 from scanner_engine.rule_engine import RuleEngine, Rule, RuleLanguage
+
+if TYPE_CHECKING:
+    from threat_intel.hub import ThreatIntelHub
 
 
 class _Section(ctk.CTkFrame):
@@ -100,9 +103,13 @@ class SettingsPage(ctk.CTkFrame):
                          :class:`ctk.CTkFrame`.
     """
 
-    def __init__(self, master, on_theme_toggle, on_lang_change, **kwargs) -> None:
+    def __init__(
+        self, master, on_theme_toggle, on_lang_change,
+        threat_hub: Optional["ThreatIntelHub"] = None, **kwargs,
+    ) -> None:
         tm = ThemeManager()
         super().__init__(master, fg_color=tm.c("bg"), corner_radius=0, **kwargs)
+        self._threat_hub = threat_hub
         self._on_theme = on_theme_toggle
         self._on_lang  = on_lang_change
         # Obtain the singleton SoundManager to read and update sound settings
@@ -372,6 +379,12 @@ class SettingsPage(ctk.CTkFrame):
         ).pack(anchor="w", pady=(6, 0))
         self._refresh_deps_status()
 
+        # ── Threat Feed ───────────────────────────────────────────────
+        if self._threat_hub is not None:
+            feed_sec = _Section(scroll, f"\U0001f4e1  {lm.t('tf_settings_title')}")
+            feed_sec.pack(fill="x", pady=(0, 12))
+            self._build_threat_feed_section(feed_sec, tm, lm)
+
         # ── Rules Manager ─────────────────────────────────────────────
         rules_sec = _Section(scroll, f"\U0001f4cb  {lm.t('rules_manager')}")
         rules_sec.pack(fill="x", pady=(0, 12))
@@ -516,6 +529,112 @@ class SettingsPage(ctk.CTkFrame):
             self._refresh_deps_status(lm.t("deps_db_failed", error=error), error=True)
         else:
             self._refresh_deps_status()
+
+    # ------------------------------------------------------------------
+    # Threat Feed
+    # ------------------------------------------------------------------
+
+    def _build_threat_feed_section(self, parent, tm, lm) -> None:
+        from threat_intel.sources import SourceCatalog
+
+        assert self._threat_hub is not None
+        config = self._threat_hub.config()
+        body = ctk.CTkFrame(parent, fg_color="transparent")
+        body.pack(fill="x", padx=16, pady=10)
+
+        row = ctk.CTkFrame(body, fg_color="transparent")
+        row.pack(fill="x")
+        ctk.CTkLabel(
+            row, text=lm.t("tf_settings_enable"), font=ctk.CTkFont(size=12),
+            text_color=tm.c("text"), fg_color="transparent",
+        ).pack(side="left")
+        self._feed_switch = ctk.CTkSwitch(
+            row, text="", onvalue=True, offvalue=False,
+            fg_color=tm.c("border"), progress_color=tm.c("accent"),
+            command=self._toggle_threat_feed,
+        )
+        self._feed_switch.pack(side="right")
+        if config.enabled:
+            self._feed_switch.select()
+        else:
+            self._feed_switch.deselect()
+        ctk.CTkLabel(
+            body, text=lm.t("tf_settings_hint"), font=ctk.CTkFont(size=9),
+            text_color=tm.c("text3"), fg_color="transparent", anchor="w",
+            justify="left", wraplength=520,
+        ).pack(anchor="w", pady=(2, 8))
+
+        row = ctk.CTkFrame(body, fg_color="transparent")
+        row.pack(fill="x")
+        ctk.CTkLabel(
+            row, text=lm.t("tf_settings_interval"), font=ctk.CTkFont(size=11),
+            text_color=tm.c("text2"), fg_color="transparent",
+        ).pack(side="left")
+        self._feed_interval = ctk.CTkEntry(
+            row, width=70, height=28, fg_color=tm.c("input_bg"),
+            border_color=tm.c("border"), text_color=tm.c("text"),
+        )
+        self._feed_interval.insert(0, str(config.interval_minutes))
+        self._feed_interval.pack(side="left", padx=(10, 0))
+
+        ctk.CTkLabel(
+            body, text=lm.t("tf_settings_sources"), font=ctk.CTkFont(size=11),
+            text_color=tm.c("text2"), fg_color="transparent", anchor="w",
+        ).pack(anchor="w", pady=(10, 2))
+        self._feed_sources = ctk.CTkTextbox(
+            body, height=150, fg_color=tm.c("input_bg"), text_color=tm.c("text"),
+            font=ctk.CTkFont(family="Consolas", size=10),
+        )
+        self._feed_sources.insert("1.0", SourceCatalog.to_text(config.sources))
+        self._feed_sources.pack(fill="x")
+
+        row = ctk.CTkFrame(body, fg_color="transparent")
+        row.pack(fill="x", pady=(6, 0))
+        ctk.CTkButton(
+            row, text=lm.t("tf_settings_save"), width=120, height=28, corner_radius=6,
+            fg_color=tm.c("accent"), hover_color=tm.c("accent_h"),
+            text_color="#ffffff", font=ctk.CTkFont(size=10),
+            command=self._save_threat_feed,
+        ).pack(side="left")
+        self._feed_status_lbl = ctk.CTkLabel(
+            row, text="", font=ctk.CTkFont(size=10), text_color=tm.c("text2"),
+            fg_color="transparent", anchor="w", justify="left", wraplength=380,
+        )
+        self._feed_status_lbl.pack(side="left", padx=(12, 0))
+
+    def _toggle_threat_feed(self) -> None:
+        """Switching on asks first and names the hosts; switching off needs no question."""
+        from gui.threat_feed_dialogs import FeedConsentDialog
+
+        hub = self._threat_hub
+        if hub is None:
+            return
+        if not self._feed_switch.get():
+            hub.set_enabled(False)
+            return
+        if FeedConsentDialog.ask(self, hub.hosts()):
+            hub.set_enabled(True)
+        else:
+            self._feed_switch.deselect()
+
+    def _save_threat_feed(self) -> None:
+        from threat_intel.sources import SourceCatalog
+
+        hub = self._threat_hub
+        if hub is None:
+            return
+        tm = ThemeManager()
+        lm = LanguageManager()
+        try:
+            sources = SourceCatalog.parse_text(self._feed_sources.get("1.0", "end"))
+        except ValueError as exc:
+            self._feed_status_lbl.configure(text=str(exc), text_color=tm.c("error"))
+            return
+        minutes = hub.set_interval(self._feed_interval.get().strip())
+        hub.set_sources(sources)
+        self._feed_interval.delete(0, "end")
+        self._feed_interval.insert(0, str(minutes))
+        self._feed_status_lbl.configure(text=lm.t("tf_settings_saved"), text_color=tm.c("success"))
 
     def _toggle_ai_online(self) -> None:
         """Save whether AI fix requests may be sent to Google Gemini."""

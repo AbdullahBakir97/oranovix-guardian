@@ -17,7 +17,7 @@ from core.alarm_center import Alarm, AlarmCenter
 from .alarms import ThreatAlarmRaiser
 from .fetcher import Fetcher, HttpFetcher
 from .models import FeedError, FeedItem, Relevance, SourceHealth
-from .projects import InventoryBuilder, ProjectRegistry
+from .projects import Inventory, InventoryBuilder, Project, ProjectRegistry
 from .relevance import RelevanceMatcher
 from .settings import ThreatFeedConfig, ThreatFeedSettings
 from .sources import DownloadedFeedSource, SourceCatalog, SourceConfig, utc_now
@@ -134,6 +134,9 @@ class ThreatFeedService:
             item_id: (verdict.relevance, verdict.matches) for item_id, verdict in verdicts.items()
         })
         return self._alarms.raise_for(self._store.items([Relevance.AFFECTS_YOU], limit=100000))
+
+    def inventory(self, project: Project) -> Inventory:
+        return self._inventory.build(project)
 
     # ------------------------------------------------------------------
     # Sources
