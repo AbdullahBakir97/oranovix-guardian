@@ -106,6 +106,19 @@ def test_text_direction_marks_are_removed() -> None:
     assert TextCleaner.plain("safe\u202egnp.exe") == "safegnp.exe"
 
 
+@pytest.mark.parametrize("link", [
+    "https://user:pw@evil.example@ok.example/", "https://user@ok.example/",
+    "https://@ok.example/", "http://ok.example:pw@evil.example/",
+])
+def test_link_with_credentials_is_refused(link: str) -> None:
+    assert SafeUrl.clean(link) == ""
+    assert FeedItem.build("News", "g", "Title", link) is None
+
+
+def test_at_sign_in_the_path_is_fine() -> None:
+    assert SafeUrl.clean("https://ok.example/users/@alice") == "https://ok.example/users/@alice"
+
+
 def test_safe_url_host() -> None:
     assert SafeUrl.host("https://News.Example.org:8443/a?b") == "news.example.org"
     assert SafeUrl.is_https("https://example.org/") and not SafeUrl.is_https("http://example.org/")

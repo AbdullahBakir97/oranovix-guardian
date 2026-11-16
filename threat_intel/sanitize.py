@@ -73,7 +73,10 @@ class SafeUrl:
 
     @classmethod
     def clean(cls, url: object) -> str:
-        """The link when it is a plain http/https URL with a host, otherwise ``""``."""
+        """The link when it is a plain http/https URL with a host, otherwise ``""``.
+
+        Links with user info (``user:pw@host``) are refused: they hide the real host.
+        """
         value = str(url or "").strip()
         if not value or len(value) > cls.MAX_LENGTH:
             return ""
@@ -84,7 +87,7 @@ class SafeUrl:
             host = parts.hostname
         except ValueError:
             return ""
-        if parts.scheme.lower() not in cls.SCHEMES or not host:
+        if parts.scheme.lower() not in cls.SCHEMES or not host or "@" in parts.netloc:
             return ""
         return value
 
