@@ -34,6 +34,8 @@ Feed addresses, checked on 2026-11-16 against the publishers' own pages:
 - A feed with a DOCTYPE is rejected as a whole.
 - The same CVE reported by two sources is two items, so it can alarm twice.
 - Uptime checks run for every project with a site address, also while the feed is switched off.
+- Feed downloads refuse hosts that resolve to loopback, private, link-local, reserved, multicast or unspecified addresses, also after a redirect. The address is resolved once for the check and again by the connection, so a DNS answer that changes in between is not caught. Uptime checks are not limited this way, because the user's own site can be a local dev server.
+- Links with user info before the host (`https://user:pw@host/`) are refused everywhere `SafeUrl` is used: feed items, the link opener, the digest and project site addresses. A site that needs basic auth in its URL cannot be monitored.
 
 ### Notes for the next build
 
