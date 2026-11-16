@@ -1,5 +1,47 @@
 # Oranovix Guardian — Development Progress
 
+## Threat Feed and My Projects (branch `feature/threat-feed`)
+
+Goal: daily security news and exploited vulnerabilities, matched on this machine against the user's own projects, plus uptime checks of their sites.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | Package `threat_intel`: `FeedItem`, `Relevance`, `FeedSource` (ABC), `HttpFetcher` (https only, 10 s timeout, 5 MB cap, User-Agent `OranovixGuardian`, ETag / If-Modified-Since, 304 = unchanged). All feed text is cleaned: tags and entities stripped, title 200 and summary 400 characters, only http/https links. | `threat_intel/models.py`, `threat_intel/fetcher.py`, `threat_intel/sanitize.py` |
+| 2 | `CisaKevSource` (newest 200 entries) and `RssSource` (RSS 2.0, RSS 1.0, Atom, parsed with defusedxml, no DTD allowed). Source list in `settings.json`. Each source keeps its own health; one failing source does not stop the others. | `threat_intel/sources.py`, `threat_intel/settings.py` |
+| 3 | `ThreatStore` in `feed.db`: dedupe by id, read flag, first seen, unread counts per relevance, items no feed has listed for 90 days are removed. The page always reads the cache and shows the last successful update. | `threat_intel/store.py` |
+| 4 | `ProjectRegistry` (name, folder, optional site address), `InventoryBuilder` on the existing manifest parsers, `ScanSummaryLookup` for the latest entry of the scan history. | `threat_intel/projects.py` |
+| 5 | `RelevanceMatcher`: AFFECTS_YOU when a CVE id leads to a local OSV advisory whose range contains an installed version; POSSIBLE when only a vendor or product name matches; GENERAL otherwise. Uses `OSVDatabase` and `VersionMatcher`, nothing is duplicated. | `threat_intel/relevance.py` |
+| 6 | One CRITICAL alarm per item and project when the item affects a project and is exploited (KEV) or its advisory is CRITICAL. Remembered in `feed.db`, so it is raised once. | `threat_intel/alarms.py`, `threat_intel/service.py` |
+| 7 | `UptimeMonitor` (subclass of `Monitor`): GET every 5 minutes, 10 s timeout, status and response time, last 100 checks per project. Three failures in a row raise one HIGH alarm; one recovery event when the site is back. | `threat_intel/uptime.py` |
+| 8 | Pages "Threat Feed" (For you, All, Sources) and "My Projects", sidebar badge, Settings section, first-run dialog that names the hosts. Off by default. Refresh runs in a background thread. Texts in AR/DE/EN. | `threat_intel/hub.py`, `gui/pages/threat_feed_page.py`, `gui/pages/projects_page.py`, `gui/threat_feed_dialogs.py`, `gui/app.py`, `gui/sidebar.py`, `gui/pages/settings_page.py` |
+| 9 | `DigestBuilder`: pure function from items, projects and "since" to plain text and HTML. No sending in this branch. | `threat_intel/digest.py` |
+
+Tests: 1164 passing, 5 skipped. Type check: `uvx pyright`, 0 errors. Tests never touch the network (fake fetcher).
+
+Feed addresses, checked on 2026-11-16 against the publishers' own pages:
+
+- CISA KEV: `https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json`
+- BleepingComputer: `https://www.bleepingcomputer.com/feed/`
+- The Hacker News: `https://feeds.feedburner.com/TheHackersNews`
+- BSI CERT-Bund: `https://wid.cert-bund.de/content/public/securityAdvisory/rss`
+
+### Known limits
+
+- Name matching for KEV entries (vendor / product against package names) is approximate. It is shown as "possible match, verify" and never alarms.
+- Only PyPI and npm packages can be confirmed, because that is what the local OSV database holds. Without that database nothing is confirmed.
+- Feeds can change their addresses. A broken source shows its error in the Sources tab; the address is edited in Settings.
+- Nothing is pushed while the app is closed. Feed and uptime checks run only while it is open.
+- A feed with a DOCTYPE is rejected as a whole.
+- The same CVE reported by two sources is two items, so it can alarm twice.
+- Uptime checks run for every project with a site address, also while the feed is switched off.
+
+### Notes for the next build
+
+- New dependency: `defusedxml`. Not merged; do not rebuild the exe from this branch yet.
+- `feed.db` is written next to `settings.json` and is gitignored.
+
+---
+
 ## Live Defense: file integrity (branch `feature/file-integrity`)
 
 Goal: detect planted or modified files in a monitored project folder. This is the first Live Defense module.

@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator, List, Set
+from typing import Any, Dict, Iterator, List, Set
 
 import pytest
 
@@ -117,10 +117,10 @@ def stored(relevance: Relevance, matches: tuple = ()) -> StoredItem:
 
 
 def state(**changes: object) -> HubState:
-    values = dict(enabled=True, asked=True, refreshing=False, last_success=NOW,
+    values: Dict[str, Any] = dict(enabled=True, asked=True, refreshing=False, last_success=NOW,
                   unread_for_you=0, database_ready=True)
     values.update(changes)
-    return HubState(**values)        # type: ignore[arg-type]
+    return HubState(**values)
 
 
 def test_feed_row_shows_which_project_and_package_matched(english: LanguageManager) -> None:
@@ -178,10 +178,10 @@ def test_source_status(english: LanguageManager) -> None:
 # ---------------------------------------------------------------------------
 
 def row(**changes: object) -> ProjectRow:
-    values = dict(project=Project("Shop", "/srv/shop", "https://shop.example.org/"), scan=None,
+    values: Dict[str, Any] = dict(project=Project("Shop", "/srv/shop", "https://shop.example.org/"), scan=None,
                   check=None, down_since=None, affecting=0, packages=5)
     values.update(changes)
-    return ProjectRow(**values)      # type: ignore[arg-type]
+    return ProjectRow(**values)
 
 
 def test_project_scan_cell(english: LanguageManager) -> None:

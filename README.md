@@ -92,6 +92,14 @@ The output is placed in `dist\Oranovix Guardian.exe` (~24 MB).
 
 ---
 
+## Threat Feed and My Projects
+
+The Threat Feed shows the CISA list of exploited vulnerabilities and security news (BleepingComputer, The Hacker News, BSI CERT-Bund) and marks the items that affect your own projects. It is **off by default**; a first-run dialog names the hosts before anything is downloaded. Only public feeds are downloaded. Nothing about your projects is sent: matching against your manifests happens on your computer with the local OSV database.
+
+My Projects lists your projects with their last scan, the feed items that affect them and, when you add a site address, an uptime check every 5 minutes. Only add sites you own.
+
+---
+
 ## Supported Languages & Rules
 
 | Language | Engine | Key Rules |
