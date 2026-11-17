@@ -1,5 +1,44 @@
 # Oranovix Guardian — Development Progress
 
+## Log Sentinel (branch `feature/log-sentinel`)
+
+Goal: read the web server's access logs on this computer, report attacks, and link them with the file integrity monitor. Detection only: nothing is blocked and nothing from the logs is sent anywhere.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | Package `log_sentinel`. `AccessLogEntry`; `LogParser` (ABC) with `NginxCombinedParser` (nginx and Apache combined and common, optional `X-Forwarded-For` field) and `JsonLinesParser` (configurable field map, dotted keys, nginx `escape=json` and Caddy work as they are); `LogFormatDetector` samples the first 20 lines. Lines are capped at 8192 characters before any regex, the patterns have no nested quantifiers, malformed lines are counted and skipped. A 1 MB hostile line takes about 1 ms. `X-Forwarded-For` is used only when the direct peer is in the trusted proxy list (empty by default). | `log_sentinel/entry.py`, `log_sentinel/parsers.py` |
+| 2 | `RequestNormalizer`: up to three rounds of URL decoding, overlong UTF-8 and `%u` forms, plus-to-space in the query, NFKC, null bytes removed, case folded, SQL comments (`/**/`, `/*!50000`, `--`, `#`) removed. Eleven `AttackRule` classes (SQL injection, XSS, path traversal and LFI, remote file inclusion, command injection, SSRF, template injection, Log4j, sensitive files, foreign admin panels, scanner user agents), each with id, title, category, base severity and an explanation in AR/DE/EN. `ResponseJudge` raises a payload one level when it got a 2xx that is not the usual error page (learned from 4xx sizes; a size that answers many attacks is a catch-all page and stops raising). 400/403/404/405/444 keep the base severity. Measured on a true positive corpus (102 payloads, 8+ per family, each also double encoded and in mixed case) and a false positive corpus (Django admin, searches with apostrophes, blog slugs with "union select" or "etc-passwd", `script-v2.js`, base64 image data): no false positives. | `log_sentinel/normalize.py`, `log_sentinel/rules.py`, `tests/fixtures/log_sentinel/` |
+| 3 | `BruteForceRule` (10 failures from one address on one login path in 5 minutes: 401/403, or a POST 200 the size of the error page, HIGH; then a redirect or a 200 of another size: CRITICAL "possible successful brute force"), `ScanRule` (more than 30 distinct 404 paths in 2 minutes MEDIUM, more than 100 HIGH), `FloodRule` (more than 300 requests a minute, MEDIUM, configurable). Allowlist of addresses and ranges skipped entirely. State per address is dropped after its window, at most 50,000 addresses are tracked. | `log_sentinel/behaviour.py` |
+| 4 | `LogSentinelMonitor` (subclass of `Monitor`): tails one or more logs, offset and file identity (inode / Windows file index) in `log_sentinel_state.db`, follows rotation (reads the rest of `<name>.1` first) and truncation, starts at the end of a new log or reads its last N MB once, at most 5 MB per cycle, every 10 seconds. Events are folded per rule, address, 10-minute window and severity, and alarm once through `AlarmCenter` with the new category `ATTACK`: CRITICAL with sound, flash and red banner, HIGH as a toast. `PlantedPathProvider` links the file integrity monitor: when a script or a suspicious file that it reported in a public folder is served (2xx/3xx), one CRITICAL event names both. 100,000 lines in about 3.5 s. | `log_sentinel/monitor.py`, `log_sentinel/tail.py`, `log_sentinel/events.py` |
+| 5 | `SecurityEventStore` in `security_events.db`: truncated address (IPv4 /24, IPv6 /48) unless full addresses are switched on, a keyed hash for counting (key in the credential store, or beside the events), the normalised request cut to 300 characters with credential values hidden, status, reason, open/acknowledged. Top attackers by hash, counts per rule and per day, acknowledge one or all, retention 30 days (configurable) applied on every start. CSV export (cells that look like formulas are written as text) and the PDF section "Attacks seen in web logs". | `log_sentinel/store.py`, `log_sentinel/privacy.py`, `log_sentinel/export.py`, `reports/pdf_generator.py` |
+| 6 | Page "Log Sentinel": log files with format, start/stop, interval, retention, trusted proxies, allowlist, "Keep full IP addresses" with a DSGVO note, events with filters and acknowledge buttons, CSV export, top addresses, red banner for open CRITICAL events. Sidebar badge for open CRITICAL and HIGH, "Watching logs" in the status bar, resume question on start. "Analyse a sample log" reads `assets/sample_access.log`. AR/DE/EN. | `log_sentinel/controller.py`, `gui/pages/log_sentinel_page.py`, `gui/app.py`, `gui/sidebar.py`, `gui/status_bar.py` |
+| 7 | Tests that attack the feature: SQL injection behind encodings, case, comments and full-width characters; a 1 MB line; rotation while reading; 50,000 addresses; a benign day of 5,000+ lines; brute force then 302; a web shell planted and served, with the real file integrity monitor. They found two misses that are fixed (a tautology in brackets, the unread rest of a rotated log). | `tests/test_sentinel_adversarial.py` |
+
+Tests: 1777 passing, 5 skipped (501 of them for Log Sentinel). Type check: `uvx pyright`, 0 errors. Tests never touch the network and never sleep.
+
+### Known limits
+
+- Detection only. Nothing is blocked; there is no firewall rule and no live connection to the web server.
+- One log path is one server: behaviour rules (brute force, scans, floods) count per watched file. The same attacker on two servers is two counts.
+- JSON field mapping is configurable in `settings.json` (`log_sentinel.json_fields`) but not detected automatically. Without a matching mapping JSON lines count as malformed.
+- Addresses are truncated to /24 (IPv4) and /48 (IPv6). Different attackers in one /24 look the same in the table; the hash still tells them apart for counting.
+- `X-Forwarded-For` is ignored until the user enters the trusted proxies. Behind a proxy or a CDN without that setting, every request seems to come from the proxy, so brute force and flood rules see one address.
+- At most three layers of URL encoding are undone. A fourth layer stays encoded (and would not work against a server that decodes once or twice either).
+- A planted file is linked only when it is a script type or the integrity monitor rated it HIGH or CRITICAL, so a changed stylesheet after a deploy is not reported as a web shell. A planted image that is served is not linked.
+- Rotation: the rest of the old file is read only when it was renamed to `<name>.1`. With date suffixes or compression right away, lines written between the last read and the rotation are lost.
+- The response judgement is a guess: a 2xx that is not the usual error page may also be a normal page that ignores the payload. Sites that answer every probe with the same 200 page are learned after five such answers.
+- Brute force on a login that answers failures with a redirect (302 back to the form) is counted only through 401/403; the 302 is taken as a possible success.
+- The hash key is kept in the Windows credential store. Without one it is stored next to the events, so the hash is a pseudonym, not protection against someone who has the database file.
+- Sample log analysis stores its events like real ones (source `sample_access.log`); acknowledge them, or they are removed after the retention period.
+
+### Notes for the next build
+
+- New databases next to `settings.json`: `security_events.db` and `log_sentinel_state.db` (gitignored).
+- `assets/sample_access.log` must ship with the exe; it is in `assets/`, which the spec already collects. `.gitignore` has an exception for it, because `*.log` is ignored.
+- No new dependencies.
+
+---
+
 ## Threat Feed and My Projects (branch `feature/threat-feed`)
 
 Goal: daily security news and exploited vulnerabilities, matched on this machine against the user's own projects, plus uptime checks of their sites.
