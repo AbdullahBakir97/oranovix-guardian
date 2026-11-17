@@ -139,7 +139,7 @@ class SqlInjectionRule(AttackRule):
 
     _ON_TEXT = (
         # 1=1 style tautology after a quote, bracket or number
-        _p(r"(?:['\")]|\d) ?(?:or|and|xor|\|\||&&) ?(['\"]?)([a-z0-9_]{1,20})\1 ?(?:=|<=>|like) ?(['\"]?)\2(?![a-z0-9_])"),
+        _p(r"(?:['\")]|\d) ?(?:or|and|xor|\|\||&&) ?\(? ?(['\"]?)([a-z0-9_]{1,20})\1 ?(?:=|<=>|like) ?(['\"]?)\2(?![a-z0-9_])"),
     ) + _any(
         # union select followed by something a query selects, not by prose
         _p(r"\bunion(?: all| distinct)? ?\(? ?select ?(?:\d|null\b|@@|char\(|concat|0x|'|\"|\(|\*|[a-z_][a-z0-9_.]{0,30} ?(?:,|from\b))"),
