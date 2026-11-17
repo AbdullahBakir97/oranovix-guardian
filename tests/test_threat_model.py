@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import io
 import socket
+import ssl
+import sys
+import types
 import urllib.error
 import urllib.request
 import urllib.response
@@ -15,7 +18,14 @@ import pytest
 
 from feed_fakes import FakeFetcher
 from scanner_engine.base import Severity
-from threat_intel.fetcher import FetchError, Fetcher, FetchResponse, HttpFetcher
+from threat_intel.fetcher import (
+    CertificateError,
+    FetchError,
+    Fetcher,
+    FetchResponse,
+    HttpFetcher,
+    TlsTrust,
+)
 from threat_intel.models import FeedItem, FeedSource, PackageRef, Relevance, SourceHealth
 from threat_intel.sanitize import SafeUrl, TextCleaner
 
@@ -368,10 +378,12 @@ class FakeHttps:
     def __init__(self, answers: Dict[str, Any]) -> None:
         self.answers = answers
         self.urls: List[str] = []
+        self.contexts: List[Any] = []
 
     def __call__(self, handler: Any, request: urllib.request.Request) -> Any:
         url = request.full_url
         self.urls.append(url)
+        self.contexts.append(getattr(handler, "_context", None))
         status, body, headers = self.answers[url]
         message = Message()
         for name, value in headers.items():
@@ -436,3 +448,111 @@ def test_feed_refresh_refuses_a_source_on_an_internal_address(
 
     assert len(report.failures) == 1 and "internal address" in report.failures[0]
     assert fake.urls == []
+
+
+# ---------------------------------------------------------------------------
+# TLS trust: the system store, never without verification
+# ---------------------------------------------------------------------------
+
+class FakeTruststore(types.ModuleType):
+    """Stands in for the truststore package and remembers what it built."""
+
+    def __init__(self, verifying: bool = True) -> None:
+        super().__init__("truststore")
+        self.built: List[ssl.SSLContext] = []
+        self._verifying = verifying
+
+    def SSLContext(self, protocol: int) -> ssl.SSLContext:      # noqa: N802 (name of the real class)
+        context = ssl.SSLContext(protocol)
+        if not self._verifying:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        self.built.append(context)
+        return context
+
+
+def assert_verifies(context: ssl.SSLContext) -> None:
+    assert context.check_hostname is True
+    assert context.verify_mode is ssl.CERT_REQUIRED
+
+
+def test_context_comes_from_the_system_trust_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeTruststore()
+    monkeypatch.setitem(sys.modules, "truststore", fake)
+
+    context = TlsTrust.context()
+
+    assert fake.built == [context]
+    assert_verifies(context)
+
+
+def test_context_falls_back_to_certifi_without_truststore(monkeypatch: pytest.MonkeyPatch) -> None:
+    import certifi
+
+    asked: List[str] = []
+    real_where = certifi.where
+    monkeypatch.setitem(sys.modules, "truststore", None)        # import raises ImportError
+    monkeypatch.setattr(certifi, "where", lambda: asked.append("where") or real_where())
+
+    context = TlsTrust.context()
+
+    assert asked == ["where"]
+    assert_verifies(context)
+    assert context.cert_store_stats()["x509_ca"] > 50           # the bundle was loaded
+
+
+def test_context_still_verifies_without_truststore_and_certifi(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "truststore", None)
+    monkeypatch.setitem(sys.modules, "certifi", None)
+
+    assert_verifies(TlsTrust.context())
+
+
+def test_verification_is_switched_back_on_whatever_the_store_returns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "truststore", FakeTruststore(verifying=False))
+
+    assert_verifies(TlsTrust.context())
+
+
+def test_requests_and_redirects_use_the_same_verifying_context(
+    fake_dns: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_store = FakeTruststore()
+    monkeypatch.setitem(sys.modules, "truststore", fake_store)
+    fake = https(monkeypatch, {
+        "https://feeds.example.org/feed": (302, b"", {"Location": "https://mirror.example.org/feed.xml"}),
+        "https://mirror.example.org/feed.xml": (200, b"<rss/>", {}),
+    })
+
+    assert HttpFetcher(public_only=True).get("https://feeds.example.org/feed").ok
+
+    (context,) = fake_store.built
+    assert fake.contexts == [context, context]
+    assert_verifies(context)
+
+
+def test_certificate_failure_is_its_own_error() -> None:
+    untrusted = ssl.SSLCertVerificationError(
+        1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate in certificate chain"
+    )
+    opener = RecordingOpener(urllib.error.URLError(untrusted))
+
+    with pytest.raises(CertificateError) as caught:
+        HttpFetcher(opener=opener).get("https://example.org/feed")
+
+    text = str(caught.value)
+    assert CertificateError.is_text_of(text)
+    assert "self-signed certificate in certificate chain" in CertificateError.detail_of(text)
+
+
+@pytest.mark.parametrize("failure", [
+    urllib.error.URLError("timed out"),
+    urllib.error.URLError(ssl.SSLError(1, "[SSL: WRONG_VERSION_NUMBER] wrong version number")),
+    ConnectionResetError("reset"),
+])
+def test_other_failures_are_not_certificate_errors(failure: Exception) -> None:
+    with pytest.raises(FetchError) as caught:
+        HttpFetcher(opener=RecordingOpener(failure)).get("https://example.org/feed")
+
+    assert not isinstance(caught.value, CertificateError)
+    assert not CertificateError.is_text_of(str(caught.value))

@@ -280,3 +280,32 @@ def test_project_feed_cell_says_not_checked(english: LanguageManager) -> None:
 
     assert ProjectsPage.feed_text(row(checked=False)) == ("Not checked", "warning")
     assert ProjectsPage.feed_text(row(checked=False, affecting=1)) == ("1 affect it", "critical")
+
+
+# ---------------------------------------------------------------------------
+# Certificate errors in the Sources tab
+# ---------------------------------------------------------------------------
+
+def test_certificate_error_of_a_source_is_explained(english: LanguageManager) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+    from threat_intel.fetcher import CertificateError
+
+    on = SourceConfig("BSI", "https://wid.example.org/rss")
+    technical = "[SSL: CERTIFICATE_VERIFY_FAILED] self-signed certificate in certificate chain"
+    stored_error = str(CertificateError(technical))
+
+    text, level = ThreatFeedPage.source_status(on, SourceHealth("BSI", None, stored_error, NOW))
+
+    assert text == f"The certificate of this site is not trusted by your system.\n{technical}"
+    assert level == "error"
+
+
+@pytest.mark.parametrize("error", [
+    "URLError: timed out", "The server answered with status 503.",
+    "SSLError: [SSL: WRONG_VERSION_NUMBER] wrong version number", "The feed is not valid XML.",
+])
+def test_other_source_errors_are_shown_as_they_are(english: LanguageManager, error: str) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    on = SourceConfig("News", "https://news.example.org/feed")
+    assert ThreatFeedPage.source_status(on, SourceHealth("News", None, error, NOW)) == (error, "error")

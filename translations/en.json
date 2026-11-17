@@ -395,5 +395,9 @@
   "tf_not_checked_no_projects": "Not checked: add your projects on the My Projects page.",
   "tf_not_checked_no_database": "Not checked: update the vulnerability database in Settings.",
   "proj_feed_unchecked": "Not checked",
-  "tf_show_newest": "Back to the first page"
+  "tf_show_newest": "Back to the first page",
+  "tf_src_cert_untrusted": "The certificate of this site is not trusted by your system.",
+  "tf_not_checked_partial": "Partly checked: {source} could not be read.",
+  "tf_match_no_fix": "no fixed version known",
+  "digest_no_fix": "no fixed version known"
 }

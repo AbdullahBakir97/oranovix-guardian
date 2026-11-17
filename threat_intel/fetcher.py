@@ -9,11 +9,17 @@ validators of the last download, and nothing else.
 Feed downloads run with ``public_only``: a host that resolves to any
 address that is not globally routable (loopback, private, carrier NAT,
 link-local, ...) is refused, also when a redirect points there.
+
+Certificates are checked against the trust store of the operating
+system (``truststore``), because Windows fetches many roots on demand
+and Python's own copy of the store then misses them. Verification is
+never switched off.
 """
 from __future__ import annotations
 
 import ipaddress
 import socket
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -25,6 +31,54 @@ from urllib.parse import urlsplit
 
 class FetchError(RuntimeError):
     """The request was refused, failed, or the answer was not acceptable."""
+
+
+class CertificateError(FetchError):
+    """The certificate of the site could not be verified.
+
+    The text starts with ``MARK``, so the page can explain it in the
+    user's language after the error was stored as plain text.
+    """
+
+    MARK = "certificate not trusted"
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"{self.MARK}: {detail}")
+
+    @classmethod
+    def is_text_of(cls, error: str) -> bool:
+        return error.startswith(cls.MARK)
+
+    @classmethod
+    def detail_of(cls, error: str) -> str:
+        return error[len(cls.MARK):].lstrip(": ")
+
+
+class TlsTrust:
+    """Builds the SSL context of every download. It always verifies."""
+
+    @classmethod
+    def context(cls) -> ssl.SSLContext:
+        """The trust store of the operating system; without ``truststore``, certifi's bundle."""
+        try:
+            import truststore
+        except ImportError:
+            context = cls._bundled()
+        else:
+            context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+        return context
+
+    @staticmethod
+    def _bundled() -> ssl.SSLContext:
+        context = ssl.create_default_context()
+        try:
+            import certifi
+            context.load_verify_locations(cafile=certifi.where())
+        except (ImportError, OSError):
+            pass        # the default context alone still verifies
+        return context
 
 
 @dataclass(frozen=True)
@@ -140,7 +194,11 @@ class HttpFetcher(Fetcher):
         self._open = opener or self._default_opener()
 
     def _default_opener(self) -> Opener:
-        director = urllib.request.build_opener(_CheckedRedirects(self._check_url))
+        # One director, so a redirect is followed with the same context.
+        director = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=TlsTrust.context()),
+            _CheckedRedirects(self._check_url),
+        )
         return lambda request, timeout: director.open(request, timeout=timeout)
 
     def get(self, url: str, etag: str = "", last_modified: str = "") -> FetchResponse:
@@ -164,6 +222,8 @@ class HttpFetcher(Fetcher):
         except FetchError:
             raise
         except Exception as exc:
+            if self._is_certificate_error(exc):
+                raise CertificateError(self._reason(exc)) from exc
             raise FetchError(f"{type(exc).__name__}: {self._reason(exc)}") from exc
 
         return FetchResponse(
@@ -206,6 +266,13 @@ class HttpFetcher(Fetcher):
         if headers is None:
             return ""
         return str(headers.get(name) or "").strip()[:300]
+
+    @staticmethod
+    def _is_certificate_error(exc: Exception) -> bool:
+        """urllib wraps the SSL error in a URLError; look at both."""
+        return isinstance(exc, ssl.SSLCertVerificationError) or isinstance(
+            getattr(exc, "reason", None), ssl.SSLCertVerificationError
+        )
 
     @staticmethod
     def _reason(exc: Exception) -> str:

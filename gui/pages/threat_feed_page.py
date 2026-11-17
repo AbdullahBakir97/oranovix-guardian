@@ -17,6 +17,7 @@ import customtkinter as ctk
 from core.language_manager import LanguageManager
 from gui.theme_manager import ThemeManager
 from gui.threat_feed_dialogs import FeedConsentDialog, LinkOpener
+from threat_intel.fetcher import CertificateError
 from threat_intel.hub import HubState, ThreatIntelHub
 from threat_intel.models import ProjectMatch, Relevance, SourceHealth, StoredItem
 from threat_intel.sources import SourceConfig
@@ -477,6 +478,9 @@ class ThreatFeedPage(ctk.CTkFrame):
             return lm.t("tf_src_disabled"), "text3"
         if health.ok:
             return lm.t("tf_src_ok"), "success"
+        if CertificateError.is_text_of(health.last_error):
+            detail = CertificateError.detail_of(health.last_error)
+            return f"{lm.t('tf_src_cert_untrusted')}\n{detail}", "error"
         if health.last_error:
             return health.last_error, "error"
         return lm.t("tf_src_never"), "text3"
