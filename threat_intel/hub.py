@@ -26,7 +26,7 @@ from .projects import Project, ProjectRegistry, ScanSummary, ScanSummaryLookup
 from .relevance import RelevanceMatcher
 from .service import RefreshReport, ThreatFeedService
 from .settings import ThreatFeedConfig, ThreatFeedSettings
-from .sources import SourceCatalog, SourceConfig
+from .sources import SourceCatalog, SourceConfig, SourceKind
 from .store import FeedDatabase, ThreatStore
 from .uptime import UptimeCheck, UptimeEvent, UptimeMonitor, UptimeStore
 
@@ -47,6 +47,7 @@ class CheckState(str, Enum):
     UNREACHABLE = "unreachable"     # the last refresh reached no source
     NO_PROJECTS = "no_projects"
     NO_DATABASE = "no_database"     # without OSV data nothing can be confirmed
+    PARTIAL = "partial"             # the catalog of exploited vulnerabilities failed
 
     @property
     def text_key(self) -> str:
@@ -66,6 +67,7 @@ class HubState:
     last_report: Optional[RefreshReport] = None
     uptime_event: Optional[UptimeEvent] = None      # set only on the notification it belongs to
     has_projects: bool = True
+    failed_catalogs: Tuple[str, ...] = ()           # KEV sources whose newest attempt failed
 
     @property
     def check(self) -> CheckState:
@@ -80,11 +82,21 @@ class HubState:
             return CheckState.NO_PROJECTS
         if not self.database_ready:
             return CheckState.NO_DATABASE
+        if self.failed_catalogs:
+            # News alone cannot give the all clear. A failed news feed does not matter here.
+            return CheckState.PARTIAL
         return CheckState.CHECKED
 
     @property
     def checked(self) -> bool:
         return self.check is CheckState.CHECKED
+
+    def not_checked_text(self, translate: Callable[..., str]) -> str:
+        """Why the all clear cannot be given, in the user's language; ``""`` when it can."""
+        check = self.check
+        if check is CheckState.CHECKED:
+            return ""
+        return translate(check.text_key, source=", ".join(self.failed_catalogs))
 
 
 @dataclass(frozen=True)
@@ -200,6 +212,15 @@ class ThreatIntelHub:
             last_report=self._last_report,
             uptime_event=uptime_event,
             has_projects=bool(self._registry.list()),
+            failed_catalogs=self._failed_catalogs(),
+        )
+
+    def _failed_catalogs(self) -> Tuple[str, ...]:
+        """Read from the stored source health, so it also holds after a restart."""
+        return tuple(
+            config.name for config, health in self._service.source_health()
+            if config.kind is SourceKind.KEV and config.enabled
+            and health.last_error_at is not None and not health.ok
         )
 
     def items(self, for_you: bool, limit: int = PAGE_SIZE, offset: int = 0) -> List[StoredItem]:
@@ -228,11 +249,10 @@ class ThreatIntelHub:
         When the projects could not be checked, the headline says why.
         """
         lm = LanguageManager()
-        check = self.state().check
         return DigestBuilder.build(
             self._store.items(limit=100000), self._registry.list(), since,
             DigestTexts.translated(lm.t),
-            not_checked="" if check is CheckState.CHECKED else lm.t(check.text_key),
+            not_checked=self.state().not_checked_text(lm.t),
         )
 
     def project_rows(self) -> List[ProjectRow]:

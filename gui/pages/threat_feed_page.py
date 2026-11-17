@@ -306,9 +306,7 @@ class ThreatFeedPage(ctk.CTkFrame):
         lm = LanguageManager()
         if not for_you:
             return lm.t("tf_empty_all")
-        if state.checked:
-            return lm.t("tf_empty_for_you")
-        return lm.t(state.check.text_key)
+        return state.not_checked_text(lm.t) or lm.t("tf_empty_for_you")
 
     def _clear(self) -> None:
         self._fill_run += 1         # a fill that is still running stops

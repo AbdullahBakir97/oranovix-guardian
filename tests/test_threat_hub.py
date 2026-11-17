@@ -265,3 +265,71 @@ def test_digest_line_without_the_vulnerability_database(tmp_path: Path, osv_db: 
     assert rig.hub.items(for_you=True)[0].relevance is Relevance.POSSIBLE      # guesses only
     assert rig.hub.digest(None).headline == "Not checked: update the vulnerability database in Settings."
     assert rig.hub.project_rows()[0].checked is False
+
+
+# ---------------------------------------------------------------------------
+# Partly checked: the CISA catalog failed, the news feeds did not
+# ---------------------------------------------------------------------------
+
+NEWS_URL = "https://news.example.org/feed/"
+WITH_NEWS = KEV_ONLY + (SourceConfig("Example News", NEWS_URL, "en"),)
+PARTLY = "Partly checked: CISA KEV could not be read."
+
+
+def news_rig(tmp_path: Path, osv_db: OSVDatabase) -> Rig:
+    rig = Rig(tmp_path, osv_db)
+    rig.settings.update(enabled=True, asked=True, sources=WITH_NEWS)
+    rig.feed.answers[NEWS_URL] = (FIXTURES / "feeds" / "news_rss.xml").read_bytes()
+    rig.hub.registry.add("Patched", str(FIXTURES / "projects" / "patched_shop"))
+    return rig
+
+
+def test_failed_catalog_means_partly_checked(tmp_path: Path, osv_db: OSVDatabase) -> None:
+    rig = news_rig(tmp_path, osv_db)
+    rig.feed.answers[CisaKevSource.URL] = FetchError("URLError: timed out")
+
+    report = rig.hub.refresh_now()
+
+    assert report is not None and report.sources_ok == 1 and not report.offline
+    state = rig.hub.state()
+    assert state.check is CheckState.PARTIAL and state.failed_catalogs == ("CISA KEV",)
+    assert rig.hub.digest(None).headline == PARTLY
+    assert rig.hub.digest(None).checked is False
+    assert rig.hub.project_rows()[0].checked is False
+
+
+def test_failed_news_source_still_counts_as_checked(tmp_path: Path, osv_db: OSVDatabase) -> None:
+    rig = news_rig(tmp_path, osv_db)
+    del rig.feed.answers[NEWS_URL]
+
+    report = rig.hub.refresh_now()
+
+    assert report is not None and len(report.failures) == 1
+    state = rig.hub.state()
+    assert state.check is CheckState.CHECKED and state.failed_catalogs == ()
+    assert rig.hub.digest(None).headline.startswith("Since your last visit:")
+
+
+def test_partly_checked_ends_when_the_catalog_is_read_again(tmp_path: Path, osv_db: OSVDatabase) -> None:
+    rig = news_rig(tmp_path, osv_db)
+    catalog = rig.feed.answers[CisaKevSource.URL]
+    rig.hub.refresh_now()
+    rig.feed.answers[CisaKevSource.URL] = FetchError("URLError: timed out")
+    rig.hub.refresh_now()
+    assert rig.hub.state().check is CheckState.PARTIAL
+
+    rig.feed.answers[CisaKevSource.URL] = catalog
+    rig.hub.refresh_now()
+
+    assert rig.hub.state().check is CheckState.CHECKED
+
+
+def test_partly_checked_survives_a_restart(tmp_path: Path, osv_db: OSVDatabase) -> None:
+    rig = news_rig(tmp_path, osv_db)
+    rig.feed.answers[CisaKevSource.URL] = FetchError("URLError: timed out")
+    rig.hub.refresh_now()
+
+    restarted = Rig(tmp_path, osv_db)           # same files, no refresh in this session
+
+    assert restarted.hub.state().last_report is None
+    assert restarted.hub.digest(None).headline == PARTLY

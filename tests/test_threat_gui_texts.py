@@ -270,7 +270,7 @@ def test_switched_off_wins_over_every_other_reason() -> None:
 def test_not_checked_texts_differ_from_the_all_clear(language: str) -> None:
     texts = json.loads((TRANSLATIONS / f"{language}.json").read_text(encoding="utf-8"))
     reasons = [texts[check.text_key] for check in CheckState if check is not CheckState.CHECKED]
-    assert len(set(reasons)) == 5
+    assert len(set(reasons)) == 6
     assert texts["tf_empty_for_you"] not in reasons
     assert texts["proj_feed_unchecked"] != texts["proj_feed_clear"]
 
@@ -309,3 +309,33 @@ def test_other_source_errors_are_shown_as_they_are(english: LanguageManager, err
 
     on = SourceConfig("News", "https://news.example.org/feed")
     assert ThreatFeedPage.source_status(on, SourceHealth("News", None, error, NOW)) == (error, "error")
+
+
+# ---------------------------------------------------------------------------
+# Partly checked
+# ---------------------------------------------------------------------------
+
+def test_for_you_tab_says_partly_checked_when_the_catalog_failed(english: LanguageManager) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    current = state(failed_catalogs=("CISA KEV",))
+
+    assert current.check is CheckState.PARTIAL and not current.checked
+    assert ThreatFeedPage.empty_text(current, for_you=True) == "Partly checked: CISA KEV could not be read."
+
+
+def test_stronger_reasons_come_before_partly_checked() -> None:
+    assert state(failed_catalogs=("CISA KEV",), database_ready=False).check is CheckState.NO_DATABASE
+    assert state(failed_catalogs=("CISA KEV",), enabled=False).check is CheckState.OFF
+
+
+@pytest.mark.parametrize("language", ["en", "de", "ar"])
+def test_partly_checked_names_the_source_in_every_language(language: str) -> None:
+    lm = LanguageManager()
+    before = lm.current_lang
+    lm.set_language(language)
+    try:
+        text = state(failed_catalogs=("CISA KEV",)).not_checked_text(lm.t)
+    finally:
+        lm.set_language(before)
+    assert "CISA KEV" in text and text != lm.t("tf_empty_for_you")
