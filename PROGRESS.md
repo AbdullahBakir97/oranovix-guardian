@@ -52,6 +52,23 @@ Checked with the real network on 2026-11-17, verification on: CISA KEV, Bleeping
 
 Tests after these fixes: 1251 passing, 5 skipped. Type check: 0 errors.
 
+### Read is not fixed (branch `fix/open-exposure`)
+
+A test with real data showed a false all clear: after the affecting items were marked read, My Projects said "Nothing" and the status bar said "0 affect your projects", while the project still pinned the vulnerable version. The project column and the headline counted unread items.
+
+| Part | Change | Main files |
+|------|--------|-----------|
+| Model | `ExposureReport`: per project the confirmed items that hit it, worst first (exploited, then severity, then newest). It is built from the stored matches and never looks at the read flag. | `threat_intel/exposure.py` |
+| Read flag | Only drives notifications: the sidebar badge, the "new" counter and the alarms. | `threat_intel/store.py` |
+| My Projects | The Threat Feed column counts open items, read or not, in red. "Nothing" needs a successful full check with no match. Panel "Exposed projects" above the table: one line per exposed project with its worst item and the first fixed version that is known. | `gui/pages/projects_page.py`, `threat_intel/hub.py` |
+| Headline | Two independent parts on the page and in the status bar: "Since your last visit: X new" and "Y of your projects are exposed". The second part is also shown when the feed is off or could not be read. | `threat_intel/digest.py` |
+| For you tab | Items that affect a project are always listed, read or not, with their red project line. The switch "Show read items" (on by default) hides read guesses only. | `gui/pages/threat_feed_page.py` |
+| Accept risk | Button on an affecting item. It asks for a short reason and stores it per item and project (`accepted_risks` in `feed.db`). The item stays listed in grey with the reason, counts as "accepted" in the project column, is not exposed any more and does not alarm. "Withdraw acceptance" takes it back. | `threat_intel/store.py`, `threat_intel/hub.py`, `gui/threat_feed_dialogs.py` |
+
+An item stops counting in three ways only: the dependency is upgraded (seen by the next Refresh, or by a scan, which now matches the feed again without the network), the project is removed, or the risk is accepted.
+
+Tests after this change: 1276 passing, 5 skipped. Type check: 0 errors.
+
 ### Known limits
 
 - Name matching for KEV entries (vendor / product against package names) is approximate. It is shown as "possible match, verify" and never alarms.
@@ -65,6 +82,10 @@ Tests after these fixes: 1251 passing, 5 skipped. Type check: 0 errors.
 - More than three alarms at once are announced as one alarm that names three of them. The rest is listed in the "For you" tab only.
 - "Partly checked" looks at sources of kind `kev` only. When the user disables or removes the CISA source, nothing says that exploited vulnerabilities are no longer checked.
 - The feed column of My Projects has no text of its own for "partly checked"; it shows "Not checked".
+- Exposure is as fresh as the last check. After a manifest was edited, the project column changes with the next Refresh, the next scan, or when a project is added or removed, not at once.
+- With the feed switched off, Refresh does nothing, so an upgrade is only seen by a scan.
+- Possible matches (name only) never count as exposure. They are guesses.
+- "Accept risk" on an item applies to every project the item hits at that moment. There is no button for a single project, and no date on which an acceptance runs out.
 - Opening the link of a news item or of a possible match still marks it as read. Only items that affect a project wait for the Mark read button.
 - Uptime checks use the same trust store. A site with a certificate from a private CA is reported as failing unless that CA is installed in the system store.
 - A page of the list holds at most 200 rows, because Tk cannot scroll a frame higher than 32767 pixels. With more than 200 items that affect projects, the rest is on the next page.

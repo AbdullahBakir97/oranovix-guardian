@@ -54,7 +54,7 @@ def sample() -> List[StoredItem]:
 def test_headline_counts_new_and_affecting_items() -> None:
     digest = DigestBuilder.build(sample(), [SHOP, BLOG], VISIT)
 
-    assert digest.headline == "Since your last visit: 3 new, 1 affect your projects"
+    assert digest.headline == "Since your last visit: 3 new  ·  1 of your projects is exposed"
     assert (digest.new_count, digest.affecting_count, digest.possible_count) == (3, 1, 1)
     assert digest.text.splitlines()[0] == digest.headline
 
@@ -63,7 +63,7 @@ def test_plain_text_output() -> None:
     digest = DigestBuilder.build(sample(), [SHOP, BLOG], VISIT)
 
     assert digest.text == (
-        "Since your last visit: 3 new, 1 affect your projects\n"
+        "Since your last visit: 3 new  ·  1 of your projects is exposed\n"
         "\n"
         "Affects your projects (1)\n"
         "- CVE-2019-14234: Django SQL Injection Vulnerability [CISA KEV, 2026-11-14] (exploited in the wild)\n"
@@ -79,8 +79,8 @@ def test_plain_text_output() -> None:
         "- Ransomware gang hits hospital chain [Example News, 2026-11-14]\n"
         "\n"
         "Your projects\n"
-        "- Shop: 1 item(s) affect it\n"
-        "- Blog: nothing new affects it\n"
+        "- Shop: 2 item(s) affect it\n"          # the one seen before the visit still counts
+        "- Blog: nothing affects it\n"
     )
 
 
@@ -98,8 +98,10 @@ def test_without_since_every_item_counts() -> None:
 def test_nothing_new() -> None:
     digest = DigestBuilder.build(sample(), [SHOP], AFTER + timedelta(days=1))
     assert digest.new_count == 0
-    assert digest.headline == "Nothing new since your last visit."
-    assert digest.text == "Nothing new since your last visit.\n\nYour projects\n- Shop: nothing new affects it\n"
+    # Nothing is new, but the project is still exposed to what was seen before.
+    assert digest.headline == "Nothing new since your last visit.  ·  1 of your projects is exposed"
+    assert digest.exposed_count == 1
+    assert digest.text == digest.headline + "\n\nYour projects\n- Shop: 2 item(s) affect it\n"
 
 
 def test_no_items_and_no_projects() -> None:
@@ -121,14 +123,14 @@ def test_other_news_is_cut_after_ten() -> None:
 def test_html_output_has_links_and_sections() -> None:
     digest = DigestBuilder.build(sample(), [SHOP, BLOG], VISIT)
 
-    assert digest.html.startswith("<h2>Since your last visit: 3 new, 1 affect your projects</h2>\n")
+    assert digest.html.startswith("<h2>Since your last visit: 3 new  ·  1 of your projects is exposed</h2>\n")
     assert "<h3>Affects your projects (1)</h3>" in digest.html
     assert (
         '<li><a href="https://news.example.org/kev-1">CVE-2019-14234: Django SQL Injection '
         "Vulnerability [CISA KEV, 2026-11-14] (exploited in the wild)</a>"
         "<br><small>Shop: Django 2.2.0 (CVE-2019-14234), fixed in 2.2.4</small></li>"
     ) in digest.html
-    assert "<li>Blog: nothing new affects it</li>" in digest.html
+    assert "<li>Blog: nothing affects it</li>" in digest.html
 
 
 def test_html_escapes_everything_and_never_links_a_script() -> None:
@@ -156,14 +158,15 @@ def test_same_input_gives_the_same_digest() -> None:
 
 def test_wording_can_be_translated() -> None:
     german = {
-        "digest_headline": "Seit Ihrem letzten Besuch: {new} neu, {affecting} betreffen Ihre Projekte",
+        "digest_headline": "Seit Ihrem letzten Besuch: {new} neu",
+        "digest_exposed_one": "1 Ihrer Projekte ist betroffen",
         "digest_affecting": "Betrifft Ihre Projekte",
     }
     texts = DigestTexts.translated(lambda key: german.get(key, key))
 
     digest = DigestBuilder.build(sample(), [SHOP], VISIT, texts)
 
-    assert digest.headline == "Seit Ihrem letzten Besuch: 3 neu, 1 betreffen Ihre Projekte"
+    assert digest.headline == "Seit Ihrem letzten Besuch: 3 neu  ·  1 Ihrer Projekte ist betroffen"
     assert "Betrifft Ihre Projekte (1)" in digest.text
     assert "Other news (1)" in digest.text              # untranslated keys stay English
 
@@ -178,11 +181,12 @@ def test_not_checked_replaces_the_headline_and_calls_no_project_clear() -> None:
     reason = "Not checked: the Threat Feed is switched off."
     digest = DigestBuilder.build(sample(), [SHOP, BLOG], VISIT, not_checked=reason)
 
-    assert digest.headline == reason and digest.checked is False
-    assert digest.text.splitlines()[0] == reason
-    assert "Shop: 1 item(s) affect it" in digest.text
-    assert "nothing new affects it" not in digest.text and "nothing new affects it" not in digest.html
-    assert f"<h2>{reason}</h2>" in digest.html
+    # Not checked, but what is already known about the projects is still said.
+    assert digest.headline == reason + "  ·  1 of your projects is exposed" and digest.checked is False
+    assert digest.text.splitlines()[0] == digest.headline
+    assert "Shop: 2 item(s) affect it" in digest.text
+    assert "nothing affects it" not in digest.text and "nothing affects it" not in digest.html
+    assert f"<h2>{digest.headline}</h2>" in digest.html
 
     nothing = DigestBuilder.build([], [SHOP], VISIT, not_checked=reason)
     assert nothing.headline == reason and "Nothing new" not in nothing.text

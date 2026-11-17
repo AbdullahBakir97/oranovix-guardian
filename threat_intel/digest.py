@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Dict, List, Optional, Sequence
 
+from .exposure import ExposureReport
 from .models import ProjectMatch, Relevance, StoredItem
 from .projects import Project
 from .sanitize import SafeUrl
@@ -22,7 +23,11 @@ from .sanitize import SafeUrl
 class DigestTexts:
     """The wording of a digest. English by default; the GUI passes translations."""
 
-    headline: str = "Since your last visit: {new} new, {affecting} affect your projects"
+    headline: str = "Since your last visit: {new} new"
+    exposed: str = "{count} of your projects are exposed"
+    exposed_one: str = "1 of your projects is exposed"
+    exposed_none: str = "none of your projects is exposed"
+    accepted: str = "{count} accepted"
     nothing_new: str = "Nothing new since your last visit."
     affecting: str = "Affects your projects"
     possible: str = "Possible matches, verify"
@@ -33,10 +38,10 @@ class DigestTexts:
     no_fix: str = "no fixed version known"
     projects: str = "Your projects"
     project_line: str = "{name}: {count} item(s) affect it"
-    project_clear: str = "{name}: nothing new affects it"
+    project_clear: str = "{name}: nothing affects it"
 
     KEYS = (
-        "headline", "nothing_new", "affecting", "possible", "other", "more",
+        "headline", "exposed", "exposed_one", "exposed_none", "accepted", "nothing_new", "affecting", "possible", "other", "more",
         "exploited", "fix", "no_fix", "projects", "project_line", "project_clear",
     )
 
@@ -61,12 +66,14 @@ class Digest:
     text: str
     html: str
     checked: bool = True        # False: the headline says why nothing was checked
+    exposed_count: int = 0      # projects with an open confirmed item, read or not
 
 
 class DigestBuilder:
     """Builds the digest. No state, no I/O."""
 
     MAX_OTHER = 10
+    SEPARATOR = "  \u00b7  "
 
     @classmethod
     def build(
@@ -76,13 +83,19 @@ class DigestBuilder:
         since: Optional[datetime],
         texts: DigestTexts = DigestTexts(),
         not_checked: str = "",
+        exposure: Optional[ExposureReport] = None,
     ) -> Digest:
         """Digest of the items first seen after *since* (all of them when ``None``).
 
         Background items are not news, unless they affect a project.
         *not_checked* is the reason why the projects could not be checked
-        (feed off, no database, ...). It replaces the headline, and no
+        (feed off, no database, ...). It replaces the "new" part, and no
         project is then called clear.
+
+        The headline has two parts that do not depend on each other: what
+        is new since the visit, and how many projects are exposed. The
+        second one counts every open item, read or not. *exposure* carries
+        the accepted risks; without it, it is built from the items.
         """
         new = [
             item for item in items
@@ -93,21 +106,32 @@ class DigestBuilder:
         possible = [item for item in new if item.relevance is Relevance.POSSIBLE]
         other = [item for item in new if item.relevance is Relevance.GENERAL]
 
+        if exposure is None:
+            exposure = ExposureReport.build(items, projects)
+        checked = not not_checked
+        exposed = len(exposure.exposed)
         if not_checked:
             headline = not_checked
         elif new:
+            # "affecting" is still passed for wordings written for the old headline.
             headline = texts.headline.format(new=len(new), affecting=len(affecting))
         else:
             headline = texts.nothing_new
-        checked = not not_checked
+        if exposed == 1:
+            headline += cls.SEPARATOR + texts.exposed_one
+        elif exposed:
+            headline += cls.SEPARATOR + texts.exposed.format(count=exposed)
+        elif checked and projects:
+            headline += cls.SEPARATOR + texts.exposed_none
         return Digest(
             new_count=len(new),
             affecting_count=len(affecting),
             possible_count=len(possible),
             headline=headline,
-            text=cls._text(headline, affecting, possible, other, projects, texts, checked),
-            html=cls._html(headline, affecting, possible, other, projects, texts, checked),
+            text=cls._text(headline, affecting, possible, other, exposure, texts, checked),
+            html=cls._html(headline, affecting, possible, other, exposure, texts, checked),
             checked=checked,
+            exposed_count=exposed,
         )
 
     @staticmethod
@@ -122,7 +146,7 @@ class DigestBuilder:
     @classmethod
     def _text(
         cls, headline: str, affecting: Sequence[StoredItem], possible: Sequence[StoredItem],
-        other: Sequence[StoredItem], projects: Sequence[Project], texts: DigestTexts,
+        other: Sequence[StoredItem], exposure: ExposureReport, texts: DigestTexts,
         checked: bool = True,
     ) -> str:
         lines: List[str] = [headline]
@@ -139,7 +163,7 @@ class DigestBuilder:
             lines += [f"- {cls._line(item, texts)}" for item in other[: cls.MAX_OTHER]]
             if len(other) > cls.MAX_OTHER:
                 lines.append(f"  {texts.more.format(count=len(other) - cls.MAX_OTHER)}")
-        project_lines = cls._project_lines(projects, affecting, texts, checked)
+        project_lines = cls._project_lines(exposure, texts, checked)
         if project_lines:
             lines += ["", texts.projects] + [f"- {line}" for line in project_lines]
         return "\n".join(lines) + "\n"
@@ -164,19 +188,21 @@ class DigestBuilder:
         return line
 
     @staticmethod
-    def _project_lines(
-        projects: Sequence[Project], affecting: Sequence[StoredItem], texts: DigestTexts,
-        checked: bool = True,
-    ) -> List[str]:
+    def _project_lines(exposure: ExposureReport, texts: DigestTexts, checked: bool = True) -> List[str]:
+        """One line per project: what it is exposed to, whatever was read."""
         lines = []
-        for project in projects:
-            count = sum(
-                1 for item in affecting if any(m.project == project.name for m in item.matches)
-            )
-            if not count and not checked:
+        for entry in exposure.projects:
+            count, accepted = len(entry.open), len(entry.accepted)
+            if not count and not accepted and not checked:
                 continue        # not checked is not the same as clear
+            if accepted and not count:
+                lines.append(f"{entry.project.name}: {texts.accepted.format(count=accepted)}")
+                continue
             template = texts.project_line if count else texts.project_clear
-            lines.append(template.format(name=project.name, count=count))
+            line = template.format(name=entry.project.name, count=count)
+            if accepted:
+                line += f", {texts.accepted.format(count=accepted)}"
+            lines.append(line)
         return lines
 
     # ------------------------------------------------------------------
@@ -186,7 +212,7 @@ class DigestBuilder:
     @classmethod
     def _html(
         cls, headline: str, affecting: Sequence[StoredItem], possible: Sequence[StoredItem],
-        other: Sequence[StoredItem], projects: Sequence[Project], texts: DigestTexts,
+        other: Sequence[StoredItem], exposure: ExposureReport, texts: DigestTexts,
         checked: bool = True,
     ) -> str:
         esc = html.escape
@@ -210,7 +236,7 @@ class DigestBuilder:
             parts.append("</ul>")
             if len(other) > cls.MAX_OTHER:
                 parts.append(f"<p>{esc(texts.more.format(count=len(other) - cls.MAX_OTHER))}</p>")
-        project_lines = cls._project_lines(projects, affecting, texts, checked)
+        project_lines = cls._project_lines(exposure, texts, checked)
         if project_lines:
             parts.append(f"<h3>{esc(texts.projects)}</h3>")
             parts.append("<ul>" + "".join(f"<li>{esc(line)}</li>" for line in project_lines) + "</ul>")

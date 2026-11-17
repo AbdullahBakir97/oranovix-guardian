@@ -10,16 +10,24 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import font as tkfont
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import customtkinter as ctk
 
 from core.language_manager import LanguageManager
 from gui.theme_manager import ThemeManager
-from gui.threat_feed_dialogs import FeedConsentDialog, LinkOpener
+from gui.threat_feed_dialogs import FeedConsentDialog, LinkOpener, RiskDialog
 from threat_intel.fetcher import CertificateError
 from threat_intel.hub import HubState, ThreatIntelHub
-from threat_intel.models import ProjectMatch, Relevance, SourceHealth, StoredItem
+from threat_intel.models import (
+    AcceptedRisk,
+    ProjectMatch,
+    Relevance,
+    RiskKey,
+    SourceHealth,
+    StoredItem,
+    project_key,
+)
 from threat_intel.sources import SourceConfig
 
 
@@ -53,6 +61,8 @@ class ThreatFeedPage(ctk.CTkFrame):
         self._shown_key: Tuple[object, ...] = ()
         self._shown_rows = 0
         self._fill_run = 0          # changes whenever the list is rebuilt
+        self._show_read = True      # read guesses; affecting items are always shown
+        self._risks: Dict[RiskKey, AcceptedRisk] = {}
         self._scaling = ctk.ScalingTracker.get_widget_scaling(self)
         self._fonts: Dict[Tuple[int, bool], tkfont.Font] = {}
         self._build()
@@ -126,6 +136,12 @@ class ThreatFeedPage(ctk.CTkFrame):
             self._tab_btns[key] = btn
         self._read_all_btn = self._button(bar, lm.t("tf_mark_all_read"), self._mark_all_read, primary=False)
         self._read_all_btn.pack(side=far)
+        self._show_read_switch = ctk.CTkSwitch(
+            bar, text=lm.t("tf_show_read"), font=ctk.CTkFont(size=10), text_color=tm.c("text2"),
+            progress_color=tm.c("accent"), command=self._toggle_show_read,
+        )
+        self._show_read_switch.select()
+        self._show_read_switch.pack(side=far, padx=12)
 
         self._list = ctk.CTkScrollableFrame(body, fg_color=tm.c("bg"), corner_radius=0)
         self._list.pack(fill="both", expand=True)
@@ -234,6 +250,7 @@ class ThreatFeedPage(ctk.CTkFrame):
         self._read_all_btn.configure(
             state="normal" if any(not i.read for i in items) else "disabled"
         )
+        self._show_read_switch.configure(state="normal" if for_you else "disabled")
 
         tm = ThemeManager()
         offset = self._offsets[self._tab]
@@ -252,10 +269,12 @@ class ThreatFeedPage(ctk.CTkFrame):
         """Items of the current page, the size of the whole tab, and a key for "unchanged"."""
         for_you = self._tab == "for_you"
         offset = self._offsets[self._tab]
-        items = self._hub.items(for_you, self._hub.PAGE_SIZE, offset)
-        total = self._hub.item_count(for_you)
-        key = (self._tab, offset, total, state.check,
-               tuple((i.id, i.read, i.relevance, i.matches) for i in items))
+        items = self._hub.items(for_you, self._hub.PAGE_SIZE, offset, show_read=self._show_read)
+        total = self._hub.item_count(for_you, show_read=self._show_read)
+        self._risks = self._hub.accepted_risks()
+        key = (self._tab, offset, total, state.check, self._show_read,
+               tuple((i.id, i.read, i.relevance, i.matches) for i in items),
+               tuple(sorted((k, r.reason) for k, r in self._risks.items())))
         return items, total, key
 
     def _fill(self, run: int, items: Sequence[StoredItem], start: int, available: int) -> None:
@@ -350,19 +369,37 @@ class ThreatFeedPage(ctk.CTkFrame):
                 top, lm.t("tf_mark_read"), lambda i=stored.id: self._mark_read(i),
                 tm.c("bg3"), tm.c("hover"), tm.c("text2"),
             ).pack(side=far, padx=(px(4), 0))
+        if stored.relevance is Relevance.AFFECTS_YOU:
+            if self.open_matches(stored, self._risks):
+                self._row_button(
+                    top, lm.t("tf_accept_risk"), lambda s=stored: self._accept_risk(s),
+                    tm.c("bg3"), tm.c("hover"), tm.c("text2"),
+                ).pack(side=far, padx=(px(4), 0))
+            else:
+                self._row_button(
+                    top, lm.t("tf_withdraw_risk"), lambda s=stored: self._withdraw_risk(s),
+                    tm.c("bg3"), tm.c("hover"), tm.c("text2"),
+                ).pack(side=far, padx=(px(4), 0))
         self._row_button(
             top, lm.t("tf_open_link"), lambda s=stored: self._open(s),
             tm.c("accent"), tm.c("accent_h"), "#ffffff",
         ).pack(side=far)
 
-        lines = self.match_lines(stored)
+        lines = self.match_lines(stored, risks=self._risks)
+        accepted = self.accepted_lines(stored, self._risks)
         tk.Label(
             row, text=item.title, wraplength=px(720), justify=justify, anchor=anchor,
             font=self._font(12, bold=not stored.read), bg=card,
             fg=tm.c("text2") if stored.read else tm.c("text"),
-        ).pack(fill="x", padx=px(10), pady=(px(4), 0 if lines else px(9)))
+        ).pack(fill="x", padx=px(10), pady=(px(4), 0 if lines or accepted else px(9)))
 
+        if accepted:
+            tk.Label(
+                row, text="\n".join(accepted), wraplength=px(720), justify=justify, anchor=anchor,
+                font=self._font(10), bg=card, fg=tm.c("text3"),
+            ).pack(fill="x", padx=px(10), pady=(px(2), 0 if lines else px(9)))
         if lines:
+            # Read or not: an open match keeps its colour.
             color = tm.c("critical") if stored.relevance is Relevance.AFFECTS_YOU else tm.c("warning")
             tk.Label(
                 row, text="\n".join(lines), wraplength=px(720), justify=justify,
@@ -412,12 +449,43 @@ class ThreatFeedPage(ctk.CTkFrame):
             return stored.item.source
         return f"{stored.item.source}  ·  {published.astimezone().strftime('%Y-%m-%d')}"
 
+    @staticmethod
+    def open_matches(
+        stored: StoredItem, risks: Optional[Mapping[RiskKey, AcceptedRisk]] = None,
+    ) -> List[ProjectMatch]:
+        """Matches whose risk was not accepted."""
+        risks = risks or {}
+        return [
+            match for match in stored.matches
+            if (stored.id, project_key(match.project_path)) not in risks
+        ]
+
     @classmethod
-    def match_lines(cls, stored: StoredItem, limit: int = 4) -> List[str]:
-        """Which project and package matched; a guess is labelled as one."""
+    def accepted_lines(
+        cls, stored: StoredItem, risks: Optional[Mapping[RiskKey, AcceptedRisk]] = None,
+    ) -> List[str]:
+        """Matches whose risk was accepted, with the reason. Shown in grey."""
         lm = LanguageManager()
-        lines = [cls._match_line(match) for match in stored.matches[:limit]]
-        hidden = len(stored.matches) - limit
+        lines = []
+        for match in stored.matches:
+            risk = (risks or {}).get((stored.id, project_key(match.project_path)))
+            if risk is not None:
+                lines.append(f"{cls._match_line(match)}  ·  {lm.t('tf_risk_accepted', reason=risk.reason)}")
+        return lines
+
+    @classmethod
+    def match_lines(
+        cls, stored: StoredItem, limit: int = 4,
+        risks: Optional[Mapping[RiskKey, AcceptedRisk]] = None,
+    ) -> List[str]:
+        """Which project and package matched; a guess is labelled as one.
+
+        Matches with an accepted risk are not in here, see ``accepted_lines``.
+        """
+        lm = LanguageManager()
+        matches = cls.open_matches(stored, risks)
+        lines = [cls._match_line(match) for match in matches[:limit]]
+        hidden = len(matches) - limit
         if hidden > 0:
             lines.append(lm.t("tf_more_matches", count=hidden))
         if lines and stored.relevance is Relevance.POSSIBLE:
@@ -506,6 +574,20 @@ class ThreatFeedPage(ctk.CTkFrame):
     def _mark_read(self, item_id: str) -> None:
         self._hub.store.mark_read([item_id])
         self._hub.notify()
+
+    def _toggle_show_read(self) -> None:
+        self._show_read = bool(self._show_read_switch.get())
+        self._offsets["for_you"] = 0
+        self._render(force=True)
+
+    def _accept_risk(self, stored: StoredItem) -> None:
+        projects = sorted({match.project for match in self.open_matches(stored, self._risks)})
+        reason = RiskDialog.ask(self, stored.item.title, projects)
+        if reason:
+            self._hub.accept_risk(stored.id, reason)
+
+    def _withdraw_risk(self, stored: StoredItem) -> None:
+        self._hub.withdraw_risk(stored.id)
 
     def _mark_all_read(self) -> None:
         relevances = [Relevance.AFFECTS_YOU, Relevance.POSSIBLE] if self._tab == "for_you" else None

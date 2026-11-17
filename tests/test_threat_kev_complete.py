@@ -142,7 +142,7 @@ def test_first_refresh_does_not_flood(oldest_hits: Rig) -> None:
     assert len(oldest_hits.store.new_since(None)) == RECENT + 1
 
     digest = DigestBuilder.build(oldest_hits.store.items(limit=100000), oldest_hits.registry.list(), None)
-    assert digest.headline == f"Since your last visit: {RECENT + 1} new, 1 affect your projects"
+    assert digest.headline == f"Since your last visit: {RECENT + 1} new  ·  1 of your projects is exposed"
 
     (alarm,) = oldest_hits.channel.alarms
     assert alarm.level is AlarmLevel.CRITICAL and DJANGO_CVE in alarm.worst_issue.title

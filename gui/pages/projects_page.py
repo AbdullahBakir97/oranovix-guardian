@@ -17,6 +17,7 @@ from gui.animation_manager import AnimationManager
 from gui.confirm_dialog import ConfirmDialog
 from gui.theme_manager import ThemeManager
 from gui.threat_feed_dialogs import ProjectDialog
+from threat_intel.exposure import ExposureReport, ProjectExposure
 from threat_intel.hub import HubState, ProjectRow, ThreatIntelHub
 from threat_intel.projects import ProjectError
 from threat_intel.uptime import UptimeEventKind
@@ -74,11 +75,15 @@ class ProjectsPage(ctk.CTkFrame):
 
         body = ctk.CTkFrame(self, fg_color=tm.c("bg"), corner_radius=0)
         body.pack(fill="both", expand=True, padx=20, pady=12)
-        ctk.CTkLabel(
+        self._notice = ctk.CTkLabel(
             body, text=f"⚠  {lm.t('proj_site_notice')}  {lm.t('proj_uptime_hint')}",
             font=ctk.CTkFont(size=10), text_color=tm.c("text3"), fg_color="transparent",
             anchor=lm.text_anchor, wraplength=780, justify=lm.text_justify,
-        ).pack(fill="x", pady=(0, 8))
+        )
+        self._notice.pack(fill="x", pady=(0, 8))
+        # Filled only while a project is exposed.
+        self._exposed = ctk.CTkFrame(body, fg_color=tm.c("card"), corner_radius=8,
+                                     border_width=1, border_color=tm.c("critical"))
         self._table = ctk.CTkScrollableFrame(body, fg_color=tm.c("bg"), corner_radius=0)
         self._table.pack(fill="both", expand=True)
 
@@ -114,7 +119,8 @@ class ProjectsPage(ctk.CTkFrame):
 
     def _render(self, force: bool = False) -> None:
         rows = self._hub.project_rows()
-        key = tuple(rows)
+        exposed = self.exposed_lines(self._hub.exposure())
+        key = (tuple(rows), tuple(exposed))
         if key == self._shown_key and not force:
             return
         self._shown_key = key
@@ -124,6 +130,7 @@ class ProjectsPage(ctk.CTkFrame):
         tm = ThemeManager()
         lm = LanguageManager()
         side = lm.pack_side
+        self._render_exposed(exposed)
         if not rows:
             ctk.CTkLabel(self._table, text=lm.t("proj_empty"), font=ctk.CTkFont(size=12),
                          text_color=tm.c("text3")).pack(pady=28)
@@ -136,6 +143,51 @@ class ProjectsPage(ctk.CTkFrame):
                          text_color=tm.c("text3")).pack(side=side, padx=4)
         for row in rows:
             self._project_row(row)
+
+    def _render_exposed(self, lines: List[str]) -> None:
+        """The panel above the table: one line per exposed project."""
+        tm = ThemeManager()
+        lm = LanguageManager()
+        for child in self._exposed.winfo_children():
+            child.destroy()
+        if not lines:
+            self._exposed.pack_forget()
+            return
+        ctk.CTkLabel(
+            self._exposed, text=f"⚠  {lm.t('proj_exposed_title')}",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color=tm.c("critical"),
+            fg_color="transparent", anchor=lm.text_anchor,
+        ).pack(fill="x", padx=12, pady=(8, 2))
+        ctk.CTkLabel(
+            self._exposed, text="\n".join(lines), font=ctk.CTkFont(size=10),
+            text_color=tm.c("text"), fg_color="transparent", anchor=lm.text_anchor,
+            wraplength=760, justify=lm.text_justify,
+        ).pack(fill="x", padx=12, pady=(0, 8))
+        if not self._exposed.winfo_ismapped():
+            # "after" the notice: the scrollable table is not a pack slave itself.
+            self._exposed.pack(fill="x", pady=(0, 8), after=self._notice)
+
+    @classmethod
+    def exposed_lines(cls, report: ExposureReport) -> List[str]:
+        return [cls.exposed_line(entry) for entry in report.exposed]
+
+    @staticmethod
+    def exposed_line(entry: ProjectExposure) -> str:
+        """The worst open item of a project and the first fixed version that is known."""
+        lm = LanguageManager()
+        worst = entry.worst
+        if worst is None:
+            return ""
+        fix = entry.first_fix
+        package = lm.t(
+            "proj_exposed_fix" if fix else "proj_exposed_no_fix",
+            package=worst.match.package, version=worst.match.version, fix=fix,
+        )
+        line = lm.t("proj_exposed_line", project=entry.project.name,
+                    item=worst.stored.item.title, package=package)
+        if len(entry.open) > 1:
+            line += "  " + lm.t("proj_exposed_more", count=len(entry.open) - 1)
+        return line
 
     def _project_row(self, row: ProjectRow) -> None:
         tm = ThemeManager()
@@ -167,15 +219,20 @@ class ProjectsPage(ctk.CTkFrame):
                          justify=lm.text_justify, font=ctk.CTkFont(size=10),
                          text_color=tm.c(level)).pack(side=side, padx=4)
 
+        feed = ctk.CTkFrame(frame, fg_color="transparent", width=widths[4])
+        feed.pack(side=side, padx=4)
         if row.affecting:
             ctk.CTkButton(
-                frame, text=feed_text, width=widths[4], height=22, corner_radius=4,
+                feed, text=feed_text, width=widths[4], height=22, corner_radius=4,
                 font=ctk.CTkFont(size=9, weight="bold"), fg_color=tm.c("critical"),
                 hover_color=tm.c("accent_h"), text_color="#ffffff", command=self._on_open_feed,
-            ).pack(side=side, padx=4)
+            ).pack()
         else:
-            ctk.CTkLabel(frame, text=feed_text, width=widths[4], anchor=lm.text_anchor,
-                         font=ctk.CTkFont(size=10), text_color=tm.c(feed_level)).pack(side=side, padx=4)
+            ctk.CTkLabel(feed, text=feed_text, width=widths[4], anchor=lm.text_anchor,
+                         font=ctk.CTkFont(size=10), text_color=tm.c(feed_level)).pack()
+        if row.affecting and row.accepted:
+            ctk.CTkLabel(feed, text=self.accepted_text(row), width=widths[4], height=14,
+                         font=ctk.CTkFont(size=9), text_color=tm.c("text3")).pack()
 
         ctk.CTkButton(
             frame, text=lm.t("proj_remove"), width=70, height=22, corner_radius=4,
@@ -234,10 +291,17 @@ class ProjectsPage(ctk.CTkFrame):
     def feed_text(row: ProjectRow) -> Tuple[str, str]:
         lm = LanguageManager()
         if row.affecting:
+            # Read or unread makes no difference: the project is exposed.
             return lm.t("proj_feed_affecting", count=row.affecting), "critical"
+        if row.accepted:
+            return lm.t("proj_feed_accepted", count=row.accepted), "text3"
         if not row.checked:
             return lm.t("proj_feed_unchecked"), "warning"
         return lm.t("proj_feed_clear"), "text3"
+
+    @staticmethod
+    def accepted_text(row: ProjectRow) -> str:
+        return LanguageManager().t("proj_feed_accepted", count=row.accepted) if row.accepted else ""
 
     # ------------------------------------------------------------------
     # Actions

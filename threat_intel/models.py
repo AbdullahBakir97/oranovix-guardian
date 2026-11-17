@@ -8,6 +8,7 @@ matching against the projects happens later and only on this machine.
 from __future__ import annotations
 
 import hashlib
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -140,6 +141,28 @@ class ProjectMatch:
     def confirmed(self) -> bool:
         """True when a local advisory covers the installed version."""
         return bool(self.advisory_id)
+
+
+def project_key(path: str) -> str:
+    """A project folder in a form that compares equal however it was typed."""
+    return os.path.normcase(os.path.abspath(path))
+
+
+RiskKey = Tuple[str, str]       # item id, project folder
+
+
+@dataclass(frozen=True)
+class AcceptedRisk:
+    """The user decided to live with one item in one project, and wrote down why."""
+
+    item_id: str
+    project_path: str
+    reason: str
+    accepted_at: Optional[datetime] = None
+
+    @property
+    def key(self) -> RiskKey:
+        return (self.item_id, project_key(self.project_path))
 
 
 @dataclass(frozen=True)
