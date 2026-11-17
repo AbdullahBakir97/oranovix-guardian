@@ -28,7 +28,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
 from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
@@ -56,6 +56,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.language_manager import LanguageManager
 from scanner_engine.base import Issue, ScanResult, Severity
+
+if TYPE_CHECKING:
+    from log_sentinel.export import AttackReport
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +371,7 @@ class PDFReportGenerator:
         self,
         scan_result: ScanResult,
         output_path: Optional[str] = None,
+        attacks: Optional["AttackReport"] = None,
     ) -> str:
         """Build the PDF report from a scan result and write it to disk.
 
@@ -411,6 +415,8 @@ class PDFReportGenerator:
         story.append(PageBreak())
         self._add_executive_summary(story, scan_result, styles, t)
         self._add_vulnerable_dependencies(story, scan_result, styles, t)
+        if attacks is not None and not attacks.empty:
+            self._add_attacks(story, attacks, styles, t)
         story.append(PageBreak())
         self._add_issue_details(story, scan_result, styles, t)
         self._add_footer_note(story, styles, t)
@@ -815,6 +821,62 @@ class PDFReportGenerator:
                     ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
                     ("LEFTPADDING",    (0, 0), (-1, -1), 6),
                     ("RIGHTPADDING",   (0, 0), (-1, -1), 6),
+                    ("GRID",           (0, 0), (-1, -1), 0.25, _Palette.MID_GRAY),
+                ]),
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Attacks seen in web logs (Log Sentinel)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def attack_rows(attacks: "AttackReport", t) -> List[Tuple[str, str, str, str, str, str]]:
+        """Time, severity, attack, address, request, status: one row per event."""
+        return [
+            (
+                event.time.strftime("%Y-%m-%d %H:%M"), event.severity.value, t(event.title_key),
+                event.ip, event.request, str(event.status or "-"),
+            )
+            for event in attacks.events
+        ]
+
+    def _add_attacks(self, story: list, attacks: "AttackReport", S: dict, t) -> None:
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(t("pdf_attacks_title"), S["section_header"]))
+        story.append(HRFlowable(width="100%", thickness=1, color=_Palette.MID_GRAY))
+        story.append(Spacer(1, 6))
+        counts = ", ".join(f"{name} {count}" for name, count in attacks.per_severity.items() if count)
+        story.append(Paragraph(escape(t("pdf_attacks_summary", total=attacks.total, counts=counts)), S["body"]))
+        story.append(Paragraph(escape(t("pdf_attacks_privacy")), S["small"]))
+        if attacks.attackers:
+            story.append(Spacer(1, 6))
+            story.append(Paragraph(t("pdf_attacks_top"), S["body_bold"]))
+            for attacker in attacks.attackers[:5]:
+                story.append(Paragraph(escape(t(
+                    "pdf_attacks_attacker", ip=attacker.ip, hits=attacker.hits, severity=attacker.worst.value,
+                )), S["small"]))
+        story.append(Spacer(1, 6))
+        data: list = [[
+            t("ls_col_time"), t("ls_col_severity"), t("ls_col_title"), t("ls_col_ip"),
+            t("ls_col_request"), t("ls_col_status"),
+        ]]
+        for row in self.attack_rows(attacks, t):
+            data.append([Paragraph(escape(cell), S["small"]) for cell in row])
+        story.append(
+            Table(
+                data,
+                colWidths=[24 * mm, 18 * mm, 36 * mm, 24 * mm, None, 12 * mm],
+                repeatRows=1,
+                style=TableStyle([
+                    ("FONTNAME",       (0, 0), (-1, 0), FontRegistry.get_arabic_bold()),
+                    ("BACKGROUND",     (0, 0), (-1, 0), _Palette.PRIMARY),
+                    ("TEXTCOLOR",      (0, 0), (-1, 0), _Palette.WHITE),
+                    ("FONTSIZE",       (0, 0), (-1, -1), 7),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_Palette.WHITE, _Palette.LIGHT_GRAY]),
+                    ("VALIGN",         (0, 0), (-1, -1), "TOP"),
+                    ("TOPPADDING",     (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING",  (0, 0), (-1, -1), 3),
                     ("GRID",           (0, 0), (-1, -1), 0.25, _Palette.MID_GRAY),
                 ]),
             )

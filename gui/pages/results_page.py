@@ -1134,9 +1134,10 @@ class ResultsPage(ctk.CTkFrame):
             return
         self._export_btn.configure(text="⏳  Generating…", state="disabled")
         try:
+            from log_sentinel.export import AttackReport
             from reports.pdf_generator import PDFReportGenerator
             gen = PDFReportGenerator()
-            out = gen.generate(self._result, save_path)
+            out = gen.generate(self._result, save_path, attacks=AttackReport.from_default_store())
             AnimationManager.show_toast(
                 self.winfo_toplevel(),
                 f"✓  Report saved: {os.path.basename(out)}",
