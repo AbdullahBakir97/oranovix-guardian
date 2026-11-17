@@ -65,6 +65,8 @@ class NetworkList:
         return tuple(str(network) for network in self._networks)
 
     def contains(self, address: str) -> bool:
+        if not self._networks:
+            return False
         ip = parse_ip(address)
         if ip is None:
             return False
@@ -99,9 +101,11 @@ class ClientAddressResolver:
 
         Without trusted proxies the header is ignored, because anyone can write it.
         """
+        if not self._trusted or not forwarded_for:
+            return peer.strip()
         peer_ip = parse_ip(peer)
         peer_text = str(peer_ip) if peer_ip is not None else peer.strip()
-        if not self._trusted or not forwarded_for or not self._trusted.contains(peer_text):
+        if not self._trusted.contains(peer_text):
             return peer_text
         hops = [hop.strip() for hop in forwarded_for.split(",") if hop.strip() and hop.strip() != "-"]
         for hop in reversed(hops):

@@ -40,6 +40,7 @@ class IssueCategory(str, Enum):
     CORS = "cors"
     DEPENDENCY = "dependency"
     INTEGRITY = "integrity"
+    ATTACK = "attack"               # seen in a web server log, not in the code
     OTHER = "other"
 
     @classmethod

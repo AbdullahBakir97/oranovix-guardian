@@ -90,10 +90,21 @@ class LogTime:
     # 10/Oct/2026:13:55:36 +0200
     _CLF = re.compile(r"^(\d{1,2})/([A-Za-z]{3})/(\d{4}):(\d{2}):(\d{2}):(\d{2})(?: ([+-])(\d{2})(\d{2}))?$")
 
+    _last: Tuple[str, Optional[datetime]] = ("", None)
+
     @classmethod
     def parse(cls, value: Any) -> Optional[datetime]:
         if value is None or value == "":
             return None
+        if isinstance(value, str) and value == cls._last[0]:
+            return cls._last[1]             # many lines share one second
+        moment = cls._parse(value)
+        if isinstance(value, str):
+            cls._last = (value, moment)
+        return moment
+
+    @classmethod
+    def _parse(cls, value: Any) -> Optional[datetime]:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return cls._epoch(float(value))
         text = str(value).strip()[:64]

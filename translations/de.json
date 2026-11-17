@@ -432,5 +432,7 @@
   "ls_reason_failed_logins": "{count} fehlgeschlagene Anmeldungen auf {path} innerhalb von {minutes} Minuten",
   "ls_reason_login_success": "nach den fehlgeschlagenen Anmeldungen antwortete der Server {status} auf {path}",
   "ls_reason_scan_paths": "{count} verschiedene nicht vorhandene Pfade innerhalb von {minutes} Minuten",
-  "ls_reason_flood": "mehr als {limit} Anfragen in einer Minute"
+  "ls_reason_flood": "mehr als {limit} Anfragen in einer Minute",
+  "ls_reason_planted": "{file} wurde vom Live-Schutz gemeldet und wird jetzt ausgeliefert (Status {status})",
+  "language_web_log": "Web-Log"
 }

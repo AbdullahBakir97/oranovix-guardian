@@ -456,5 +456,7 @@
   "ls_reason_failed_logins": "{count} failed logins on {path} within {minutes} minutes",
   "ls_reason_login_success": "after the failed logins the server answered {status} on {path}",
   "ls_reason_scan_paths": "{count} different missing paths within {minutes} minutes",
-  "ls_reason_flood": "more than {limit} requests in one minute"
+  "ls_reason_flood": "more than {limit} requests in one minute",
+  "ls_reason_planted": "{file} was reported by Live Defense and is now served (status {status})",
+  "language_web_log": "Web log"
 }

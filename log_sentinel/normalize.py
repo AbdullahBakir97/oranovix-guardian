@@ -62,10 +62,14 @@ class RequestNormalizer:
         decoded_path, rounds_path, null_path = self._decode(path, plus_is_space=False)
         decoded_query, rounds_query, null_query = self._decode(query, plus_is_space=True)
         decoded = decoded_path + ("?" + decoded_query if decoded_query else "")
-        params = tuple(
-            (self._decode(key, True)[0], self._decode(value, True)[0])
-            for key, value in self._split(query)
-        )
+        if "%" in query:
+            params = tuple(
+                (self._decode(key, True)[0], self._decode(value, True)[0])
+                for key, value in self._split(query)
+            )
+        else:
+            # Nothing was encoded, so splitting the decoded query gives the same pairs.
+            params = tuple((key.strip(), value.strip()) for key, value in self._split(decoded_query))
         return NormalizedRequest(
             path=decoded_path,
             query=decoded_query,
@@ -103,6 +107,8 @@ class RequestNormalizer:
         null = "\x00" in text
         if null:
             text = text.replace("\x00", "")
+        if text.isprintable() and "  " not in text:
+            return text.casefold().strip(), rounds, null        # the common case: nothing to clean
         text = self._CONTROL.sub("", text).casefold()
         return self._SPACE.sub(" ", text).strip(), rounds, null
 

@@ -120,6 +120,14 @@ def _p(pattern: str) -> Pattern[str]:
     return re.compile(pattern)
 
 
+def _any(*patterns: Pattern[str]) -> Tuple[Pattern[str]]:
+    """One search instead of many: the alternatives of a rule as a single pattern.
+
+    Only for patterns without back references, whose group numbers would shift.
+    """
+    return (re.compile("|".join(f"(?:{pattern.pattern})" for pattern in patterns)),)
+
+
 # ---------------------------------------------------------------------------
 # Injection
 # ---------------------------------------------------------------------------
@@ -130,10 +138,11 @@ class SqlInjectionRule(AttackRule):
     severity = Severity.HIGH
 
     _ON_TEXT = (
-        # union select followed by something a query selects, not by prose
-        _p(r"\bunion(?: all| distinct)? ?\(? ?select ?(?:\d|null\b|@@|char\(|concat|0x|'|\"|\(|\*|[a-z_][a-z0-9_.]{0,30} ?(?:,|from\b))"),
         # 1=1 style tautology after a quote, bracket or number
         _p(r"(?:['\")]|\d) ?(?:or|and|xor|\|\||&&) ?(['\"]?)([a-z0-9_]{1,20})\1 ?(?:=|<=>|like) ?(['\"]?)\2(?![a-z0-9_])"),
+    ) + _any(
+        # union select followed by something a query selects, not by prose
+        _p(r"\bunion(?: all| distinct)? ?\(? ?select ?(?:\d|null\b|@@|char\(|concat|0x|'|\"|\(|\*|[a-z_][a-z0-9_.]{0,30} ?(?:,|from\b))"),
         _p(r"['\"] ?(?:or|and) ?['\"]?\d{1,10}['\"]? ?[<>]=? ?['\"]?\d"),
         _p(r"['\"] ?(?:or|and) ?(?:true|false)\b"),
         # time based
@@ -153,7 +162,7 @@ class SqlInjectionRule(AttackRule):
         _p(r"\bconvert ?\( ?int ?,"),
     )
     # The comment itself is the evidence: admin'-- and 1'#
-    _ON_DECODED = (
+    _ON_DECODED = _any(
         _p(r"['\"] ?\)? ?(?:--|#|/\*)"),
         _p(r"\b(?:or|and) \d{1,10}=\d{1,10} ?(?:--|#|/\*)"),
     )
@@ -171,7 +180,7 @@ class XssRule(AttackRule):
         r"on(?:error|load|mouseover|mouseenter|mouseout|focus|blur|click|dblclick|change|submit|input"
         r"|keydown|keyup|keypress|toggle|begin|end|animationstart|transitionend|pointerover|wheel)"
     )
-    _PATTERNS = (
+    _PATTERNS = _any(
         _p(r"< ?/? ?script\b"),
         _p(r"<[a-z][a-z0-9]{0,15}\b[^>]{0,200}?\b" + _EVENTS + r" ?="),
         _p(r"['\"] ?/?\b" + _EVENTS + r" ?="),
@@ -193,7 +202,7 @@ class PathTraversalRule(AttackRule):
     category = AttackCategory.PATH_TRAVERSAL
     severity = Severity.HIGH
 
-    _PATTERNS = (
+    _PATTERNS = _any(
         _p(r"(?:\.\.;?[/\\]){2,}"),
         _p(r"/web-inf/(?:web|struts|applicationcontext)\.xml\b"),
         _p(r"(?:^|[=/\\])\.\.[/\\][^ ]{0,80}?(?:etc|windows|winnt|boot|proc|inetpub)\b"),
@@ -250,7 +259,7 @@ class CommandInjectionRule(AttackRule):
     )
     # The command must be followed by an argument, a separator or the end; ";id=2" stays quiet.
     _AFTER = r"(?= ?[-/.a-z0-9$'\"|;&`)]| ?$)"
-    _ON_VALUES = (
+    _ON_VALUES = _any(
         _p(r"(?:;|\|\|?|&&|\n) ?" + _COMMANDS + _AFTER),
         _p(r"`[^`]{0,40}?\b" + _COMMANDS + r"\b[^`]{0,80}`"),
         _p(r"\$\( ?" + _COMMANDS + r"\b"),
@@ -267,7 +276,7 @@ class SsrfProbeRule(AttackRule):
     category = AttackCategory.SSRF
     severity = Severity.MEDIUM
 
-    _PATTERNS = (
+    _PATTERNS = _any(
         _p(r"\b169\.254\.169\.254\b"),
         _p(r"\bmetadata\.google\.internal\b"),
         _p(r"\b100\.100\.100\.200\b"),
@@ -294,7 +303,7 @@ class TemplateInjectionRule(AttackRule):
     category = AttackCategory.TEMPLATE_INJECTION
     severity = Severity.MEDIUM
 
-    _PATTERNS = (
+    _PATTERNS = _any(
         _p(r"\{\{ ?\d{1,6} ?[*+/-] ?['\"]?\d{1,6}['\"]? ?\}\}"),
         _p(r"\{\{[^}]{0,80}?(?:config|self|request|lipsum|cycler|joiner|namespace|__class__|__globals__"
            r"|__import__|__builtins__|_self\.env|getruntime)[^}]{0,120}\}\}"),
@@ -344,7 +353,7 @@ class SensitiveFileProbeRule(AttackRule):
     category = AttackCategory.SENSITIVE_FILE
     severity = Severity.MEDIUM
 
-    _PATTERNS = (
+    _PATTERNS = _any(
         _p(r"/\.env(?:\.[a-z0-9_]{1,20})?(?:$|/|~)"),
         _p(r"/\.git/(?:config|head|index|logs|refs|objects)\b"),
         _p(r"/\.(?:svn|hg|bzr)/"),
@@ -379,7 +388,7 @@ class ForeignAdminPanelRule(AttackRule):
     raise_on_success = False
 
     NOT_HERE = frozenset({403, 404, 410, 444})
-    _PATTERNS = (
+    _PATTERNS = _any(
         _p(r"^/wp-(?:login\.php|admin(?:/|$))"),
         _p(r"^/xmlrpc\.php$"),
         _p(r"^/(?:phpmyadmin|phpmyadmin\d?|pma|myadmin|mysqladmin|dbadmin|sqladmin)(?:/|$)"),
