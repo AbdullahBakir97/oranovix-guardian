@@ -11,7 +11,6 @@ count, so the first download of a whole catalog does not ring N times.
 from __future__ import annotations
 
 import hashlib
-import os
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from core.alarm_center import Alarm, AlarmCenter
@@ -19,7 +18,7 @@ from core.language_manager import LanguageManager
 from scanner_engine.base import Issue, Severity
 from scanner_engine.categories import IssueCategory
 
-from .models import ProjectMatch, Relevance, StoredItem
+from .models import ProjectMatch, Relevance, StoredItem, project_key
 from .store import ThreatStore
 
 Pending = Tuple[StoredItem, List[ProjectMatch]]
@@ -54,6 +53,7 @@ class ThreatAlarmRaiser:
         """
         if self._alarm_center is None:
             return []
+        accepted = self._store.accepted_risks()
         pending: List[Pending] = []
         for stored in items:
             if not self.deserves_alarm(stored):
@@ -61,6 +61,7 @@ class ThreatAlarmRaiser:
             matches = [
                 match for match in self._one_per_project(stored)
                 if not self._store.was_alarmed(stored.id, self._project_key(match))
+                and (stored.id, self._project_key(match)) not in accepted
             ]
             if matches:
                 pending.append((stored, matches))
@@ -154,4 +155,4 @@ class ThreatAlarmRaiser:
 
     @staticmethod
     def _project_key(match: ProjectMatch) -> str:
-        return os.path.normcase(os.path.abspath(match.project_path))
+        return project_key(match.project_path)

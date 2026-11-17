@@ -187,7 +187,7 @@ def test_digest_counts_what_is_new_since_the_last_visit(rig: Rig) -> None:
 
     digest = rig.hub.digest(rig.hub.store.last_visit())
 
-    assert digest.headline == "Since your last visit: 2 new, 1 affect your projects"
+    assert digest.headline == "Since your last visit: 2 new  ·  1 of your projects is exposed"
 
 
 def test_interval_and_sources_are_saved(rig: Rig) -> None:
@@ -245,7 +245,9 @@ def test_digest_line_when_every_source_failed(rig: Rig) -> None:
     rig.hub.refresh_now()
 
     assert rig.hub.state().check is CheckState.UNREACHABLE
-    assert rig.hub.digest(None).headline == "Not checked: no source could be reached. Saved items are shown."
+    assert rig.hub.digest(None).headline == (
+        "Not checked: no source could be reached. Saved items are shown.  ·  1 of your projects is exposed"
+    )
 
 
 def test_digest_line_without_projects(rig: Rig) -> None:

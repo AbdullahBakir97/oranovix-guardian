@@ -40,7 +40,7 @@ def used_keys() -> Set[str]:
     keys.update(f"tf_badge_{relevance.value}" for relevance in Relevance)
     keys.update(check.text_key for check in CheckState if check is not CheckState.CHECKED)
     keys.update(f"digest_{name}" for name in (
-        "headline", "nothing_new", "affecting", "possible", "other", "more",
+        "headline", "exposed", "exposed_one", "exposed_none", "accepted", "nothing_new", "affecting", "possible", "other", "more",
         "exploited", "fix", "no_fix", "projects", "project_line", "project_clear",
     ))
     return {key for key in keys if not key.endswith("_")}

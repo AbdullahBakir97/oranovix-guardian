@@ -23,13 +23,16 @@ from typing import Any, Callable, Collection, Dict, Iterable, List, Mapping, Opt
 from scanner_engine.base import Severity
 
 from .models import (
+    AcceptedRisk,
     CacheValidators,
     FeedItem,
     PackageRef,
     ProjectMatch,
     Relevance,
+    RiskKey,
     SourceHealth,
     StoredItem,
+    project_key,
 )
 
 Clock = Callable[[], datetime]
@@ -140,6 +143,13 @@ class ThreatStore:
             alarmed_at TEXT NOT NULL,
             PRIMARY KEY (item_id, project_path)
         );
+        CREATE TABLE IF NOT EXISTS accepted_risks (
+            item_id TEXT NOT NULL,
+            project_path TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            accepted_at TEXT NOT NULL,
+            PRIMARY KEY (item_id, project_path)
+        );
         CREATE TABLE IF NOT EXISTS feed_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     """
     _COLUMNS = (
@@ -215,13 +225,15 @@ class ThreatStore:
         limit: int = 500,
         newest_first: bool = False,
         offset: int = 0,
+        keep_affecting: bool = False,
     ) -> List[StoredItem]:
         """Stored items, the ones that affect the user first, then newest first.
 
         With *newest_first* the date alone decides the order. *offset* skips
-        that many items, for the next page of a long list.
+        that many items, for the next page of a long list. With
+        *keep_affecting*, *unread_only* never hides an item that affects a project.
         """
-        where, parameters = self._filter(relevances, unread_only)
+        where, parameters = self._filter(relevances, unread_only, keep_affecting)
         order = self._NEWEST if newest_first else self._ORDER
         rows = self._db.read(
             f"SELECT {self._COLUMNS} FROM items {where} ORDER BY {order} LIMIT ? OFFSET ?",
@@ -245,8 +257,11 @@ class ThreatStore:
         )
         return [self._stored(row) for row in rows]
 
-    def count(self, relevances: Optional[Iterable[Relevance]] = None) -> int:
-        where, parameters = self._filter(relevances, unread_only=False)
+    def count(
+        self, relevances: Optional[Iterable[Relevance]] = None,
+        unread_only: bool = False, keep_affecting: bool = False,
+    ) -> int:
+        where, parameters = self._filter(relevances, unread_only, keep_affecting)
         return int(self._db.read(f"SELECT COUNT(*) FROM items {where}", parameters)[0][0])
 
     def purge(self) -> int:
@@ -254,6 +269,7 @@ class ThreatStore:
         limit = Timestamp.text(self._clock() - timedelta(days=self.RETENTION_DAYS))
         removed = self._db.write("DELETE FROM items WHERE last_seen < ?", (limit,))
         self._db.write("DELETE FROM alarmed_items WHERE item_id NOT IN (SELECT id FROM items)")
+        self._db.write("DELETE FROM accepted_risks WHERE item_id NOT IN (SELECT id FROM items)")
         return removed
 
     # ------------------------------------------------------------------
@@ -314,6 +330,43 @@ class ThreatStore:
             "INSERT OR IGNORE INTO alarmed_items (item_id, project_path, alarmed_at) VALUES (?, ?, ?)",
             (item_id, project_path, Timestamp.text(self._clock())),
         )
+
+    # ------------------------------------------------------------------
+    # Accepted risks
+    # ------------------------------------------------------------------
+
+    def accept_risk(self, item_id: str, project_path: str, reason: str) -> AcceptedRisk:
+        """Note that the user lives with *item_id* in the project at *project_path*."""
+        now = self._clock()
+        key = project_key(project_path)
+        self._db.write(
+            "INSERT INTO accepted_risks (item_id, project_path, reason, accepted_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(item_id, project_path) DO UPDATE SET reason = excluded.reason, "
+            "accepted_at = excluded.accepted_at",
+            (item_id, key, reason, Timestamp.text(now)),
+        )
+        return AcceptedRisk(item_id, key, reason, now)
+
+    def withdraw_risk(self, item_id: str, project_path: Optional[str] = None) -> None:
+        """Take the note back, for one project or for every project of the item."""
+        if project_path is None:
+            self._db.write("DELETE FROM accepted_risks WHERE item_id = ?", (item_id,))
+        else:
+            self._db.write(
+                "DELETE FROM accepted_risks WHERE item_id = ? AND project_path = ?",
+                (item_id, project_key(project_path)),
+            )
+
+    def forget_risks(self, project_path: str) -> None:
+        """The project was removed: its notes go with it."""
+        self._db.write("DELETE FROM accepted_risks WHERE project_path = ?", (project_key(project_path),))
+
+    def accepted_risks(self) -> Dict[RiskKey, AcceptedRisk]:
+        rows = self._db.read("SELECT item_id, project_path, reason, accepted_at FROM accepted_risks")
+        return {
+            (item_id, path): AcceptedRisk(item_id, path, reason, Timestamp.parse(accepted_at))
+            for item_id, path, reason, accepted_at in rows
+        }
 
     # ------------------------------------------------------------------
     # Sources
@@ -379,7 +432,9 @@ class ThreatStore:
         return known
 
     @staticmethod
-    def _filter(relevances: Optional[Iterable[Relevance]], unread_only: bool) -> Tuple[str, List[Any]]:
+    def _filter(
+        relevances: Optional[Iterable[Relevance]], unread_only: bool, keep_affecting: bool = False,
+    ) -> Tuple[str, List[Any]]:
         clauses: List[str] = []
         parameters: List[Any] = []
         if relevances is not None:
@@ -387,7 +442,7 @@ class ThreatStore:
             clauses.append(f"relevance IN ({','.join('?' * len(values))})" if values else "0")
             parameters.extend(values)
         if unread_only:
-            clauses.append("is_read = 0")
+            clauses.append("(is_read = 0 OR relevance = 'affects_you')" if keep_affecting else "is_read = 0")
         return ("WHERE " + " AND ".join(clauses) if clauses else ""), parameters
 
     @staticmethod

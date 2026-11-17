@@ -13,18 +13,20 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from core.alarm_center import AlarmCenter
 from core.language_manager import LanguageManager
 from live_defense.base import IntegrityEvent, Monitor, MonitorReport
 
 from .digest import Digest, DigestBuilder, DigestTexts
+from .exposure import ExposureReport
 from .fetcher import Fetcher
-from .models import Relevance, SourceHealth, StoredItem
+from .models import AcceptedRisk, Relevance, RiskKey, SourceHealth, StoredItem, project_key
 from .projects import Project, ProjectRegistry, ScanSummary, ScanSummaryLookup
 from .relevance import RelevanceMatcher
 from .service import RefreshReport, ThreatFeedService
+from .sanitize import TextCleaner
 from .settings import ThreatFeedConfig, ThreatFeedSettings
 from .sources import SourceCatalog, SourceConfig, SourceKind
 from .store import FeedDatabase, ThreatStore
@@ -107,9 +109,10 @@ class ProjectRow:
     scan: Optional[ScanSummary]
     check: Optional[UptimeCheck]
     down_since: Optional[datetime]
-    affecting: int                          # unread feed items that affect it
+    affecting: int                          # open confirmed items, read or not
     packages: int
     checked: bool = True                    # False: "nothing affects it" cannot be said
+    accepted: int = 0                       # confirmed items whose risk the user accepted
 
 
 Listener = Callable[[HubState], None]
@@ -223,22 +226,40 @@ class ThreatIntelHub:
             and health.last_error_at is not None and not health.ok
         )
 
-    def items(self, for_you: bool, limit: int = PAGE_SIZE, offset: int = 0) -> List[StoredItem]:
+    def items(
+        self, for_you: bool, limit: int = PAGE_SIZE, offset: int = 0, show_read: bool = True,
+    ) -> List[StoredItem]:
         """One page of a tab.
 
         "All" is every item, newest first. "For you" is every item that
         affects a project, whatever its age, followed by the guesses.
+        Without *show_read* the guesses that were read are left out. An
+        item that affects a project is never left out.
         """
         if not for_you:
             return self._store.items(limit=limit, newest_first=True, offset=offset)
         return self._store.items(
-            [Relevance.AFFECTS_YOU, Relevance.POSSIBLE], limit=limit, offset=offset
+            [Relevance.AFFECTS_YOU, Relevance.POSSIBLE], limit=limit, offset=offset,
+            unread_only=not show_read, keep_affecting=True,
         )
 
-    def item_count(self, for_you: bool) -> int:
+    def item_count(self, for_you: bool, show_read: bool = True) -> int:
         """How many items the tab has in the store, shown or not."""
-        relevances = [Relevance.AFFECTS_YOU, Relevance.POSSIBLE] if for_you else None
-        return self._store.count(relevances)
+        if not for_you:
+            return self._store.count()
+        return self._store.count(
+            [Relevance.AFFECTS_YOU, Relevance.POSSIBLE], unread_only=not show_read, keep_affecting=True,
+        )
+
+    def exposure(self) -> ExposureReport:
+        """What every project is exposed to. The read flags play no part."""
+        return ExposureReport.build(
+            self._store.items([Relevance.AFFECTS_YOU], limit=100000),
+            self._registry.list(), self._store.accepted_risks(),
+        )
+
+    def accepted_risks(self) -> Dict[RiskKey, AcceptedRisk]:
+        return self._store.accepted_risks()
 
     def source_health(self) -> List[Tuple[SourceConfig, SourceHealth]]:
         return self._service.source_health()
@@ -253,10 +274,11 @@ class ThreatIntelHub:
             self._store.items(limit=100000), self._registry.list(), since,
             DigestTexts.translated(lm.t),
             not_checked=self.state().not_checked_text(lm.t),
+            exposure=self.exposure(),
         )
 
     def project_rows(self) -> List[ProjectRow]:
-        unread = self._store.items([Relevance.AFFECTS_YOU], unread_only=True, limit=100000)
+        exposure = self.exposure()
         checked = self.state().checked
         rows = []
         for project in self._registry.list():
@@ -271,11 +293,10 @@ class ThreatIntelHub:
                     self._uptime_store.down_since(project.name, project.site_url)
                     if project.site_url else None
                 ),
-                affecting=sum(
-                    1 for item in unread if any(m.project == project.name for m in item.matches)
-                ),
+                affecting=len(exposure.of(project).open),
                 packages=len(self._service.inventory(project).dependencies),
                 checked=checked,
+                accepted=len(exposure.of(project).accepted),
             ))
         return rows
 
@@ -400,15 +421,57 @@ class ThreatIntelHub:
         return project
 
     def remove_project(self, name: str) -> None:
-        if not self._registry.remove(name):
+        project = self._registry.get(name)
+        if project is None or not self._registry.remove(name):
             return
         self._uptime_store.forget(name)
+        self._store.forget_risks(project.path)
 
         def settle() -> None:
             self._service.rematch()
             self._dispatch(self.notify)
 
         self._spawn(settle)
+
+    def recheck_async(self) -> None:
+        """Match the stored items against the manifests again, e.g. after a scan. No network."""
+        def settle() -> None:
+            self._service.rematch()
+            self._dispatch(self.notify)
+
+        self._spawn(settle)
+
+    # ------------------------------------------------------------------
+    # Accepted risks
+    # ------------------------------------------------------------------
+
+    MAX_REASON = 200
+
+    def accept_risk(self, item_id: str, reason: str, project_path: Optional[str] = None) -> List[AcceptedRisk]:
+        """Accept the risk of an item, for one project or for every project it hits.
+
+        The item stays listed, in grey, and no longer counts as open.
+        Raises ``ValueError`` without a reason: the note is the point.
+        """
+        text = TextCleaner.plain(reason)[: self.MAX_REASON].strip()
+        if not text:
+            raise ValueError(LanguageManager().t("tf_risk_reason_missing"))
+        stored = self._store.get(item_id)
+        if stored is None:
+            return []
+        wanted = project_key(project_path) if project_path else None
+        paths = {
+            project_key(match.project_path): match.project_path
+            for match in stored.matches
+            if match.confirmed and wanted in (None, project_key(match.project_path))
+        }
+        notes = [self._store.accept_risk(item_id, path, text) for path in paths.values()]
+        self.notify()
+        return notes
+
+    def withdraw_risk(self, item_id: str, project_path: Optional[str] = None) -> None:
+        self._store.withdraw_risk(item_id, project_path)
+        self.notify()
 
     def check_sites_now(self) -> None:
         """One uptime cycle in the caller's thread."""

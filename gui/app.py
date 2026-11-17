@@ -422,13 +422,13 @@ class CodeGuardianApp(ctk.CTk):
             pass                # sidebar or status bar is being rebuilt
 
     def _show_feed_digest(self, failed_sources: int = 0) -> None:
-        """Status bar: "Since your last visit: N new, M affect your projects"."""
+        """Status bar: what is new since the last visit, and how many projects are exposed."""
         hub = self._threat_intel_hub()
         digest = hub.digest(hub.session_since)
         text = digest.headline
         if failed_sources:
             text += "  ·  " + LanguageManager().t("tf_refresh_failed", count=failed_sources)
-        level = "warn" if digest.affecting_count or failed_sources or not digest.checked else "info"
+        level = "warn" if digest.exposed_count or failed_sources or not digest.checked else "info"
         self._status_bar.set_status(text, level)
 
     def _start_threat_feed(self) -> None:
@@ -500,6 +500,9 @@ class CodeGuardianApp(ctk.CTk):
             ScanHistory().save_scan(result)
         except Exception:
             pass
+        # The scan may have seen an upgraded dependency: match the feed again.
+        if self._threat_hub is not None:
+            self._threat_hub.recheck_async()
         # Navigate to the results page first, then populate it with data
         self._navigate("results")
         self._pages["dashboard"].display(result)
