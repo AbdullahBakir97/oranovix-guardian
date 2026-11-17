@@ -37,6 +37,21 @@ Feed addresses, checked on 2026-11-16 against the publishers' own pages:
 
 Tests after the gap fixes: 1219 passing, 5 skipped. Type check: 0 errors.
 
+### TLS trust and polish (branch `fix/feed-tls`)
+
+| Fix | Change | Main files |
+|-----|--------|-----------|
+| 1 | Certificates are verified against the trust store of the operating system (`truststore`). Without that package the default context plus certifi's bundle is used. Verification is on in every case; there is no switch and no fallback that turns it off. Requests and redirects share one context. A certificate failure is stored as `CertificateError` and the Sources tab shows "The certificate of this site is not trusted by your system" with the technical text below. | `threat_intel/fetcher.py`, `gui/pages/threat_feed_page.py` |
+| 2 | `CheckState.PARTIAL`: when the newest download of the CISA catalog failed, the For you tab and the digest line say "Partly checked: CISA KEV could not be read". A failed news feed does not change the result. Read from the stored source health, so it holds after a restart. | `threat_intel/hub.py` |
+| 3 | A confirmed match without a fixed version shows "no fixed version known" (page and digest). | `gui/pages/threat_feed_page.py`, `threat_intel/digest.py` |
+| 4 | Opening the page never marked anything as read, but opening the link of an item did. An item that affects a project now stays unread until Mark read or Mark all read is pressed. | `gui/pages/threat_feed_page.py` |
+
+Why fix 1 was needed: `wid.cert-bund.de` sends four certificates, ending with the self-signed root "D-TRUST Root Class 3 CA 2 2009". Windows fetches roots on demand, and on the test machine that root was not in the store yet. Python reads only what is already in the store, so it reported "self-signed certificate in certificate chain". Windows itself accepts the chain, and so does `truststore`, which asks Windows.
+
+Checked with the real network on 2026-11-17, verification on: CISA KEV, BleepingComputer, The Hacker News and BSI CERT-Bund all download, with `truststore` and also with the certifi fallback.
+
+Tests after these fixes: 1251 passing, 5 skipped. Type check: 0 errors.
+
 ### Known limits
 
 - Name matching for KEV entries (vendor / product against package names) is approximate. It is shown as "possible match, verify" and never alarms.
@@ -48,7 +63,10 @@ Tests after the gap fixes: 1219 passing, 5 skipped. Type check: 0 errors.
 - Uptime checks run for every project with a site address, also while the feed is switched off.
 - A catalog entry counts as background by its date alone (older than 30 days when it first arrives), not only on the very first refresh. After a long break the entries added in between arrive silently too; they are still matched and still alarm when they affect a project.
 - More than three alarms at once are announced as one alarm that names three of them. The rest is listed in the "For you" tab only.
-- "Checked" means that the last refresh reached at least one source. When only the CISA catalog fails and the news feeds answer, the page still counts as checked; the failing source is shown in the Sources tab and in the status bar.
+- "Partly checked" looks at sources of kind `kev` only. When the user disables or removes the CISA source, nothing says that exploited vulnerabilities are no longer checked.
+- The feed column of My Projects has no text of its own for "partly checked"; it shows "Not checked".
+- Opening the link of a news item or of a possible match still marks it as read. Only items that affect a project wait for the Mark read button.
+- Uptime checks use the same trust store. A site with a certificate from a private CA is reported as failing unless that CA is installed in the system store.
 - A page of the list holds at most 200 rows, because Tk cannot scroll a frame higher than 32767 pixels. With more than 200 items that affect projects, the rest is on the next page.
 - The rows of the feed list are plain Tk widgets, so they do not follow a change of the display scaling while the app is open.
 - Feed downloads refuse hosts that resolve to any address that is not globally routable (loopback, private, carrier NAT, link-local, reserved, multicast, unspecified), also after a redirect. The address is resolved once for the check and again by the connection, so a DNS answer that changes in between is not caught. Uptime checks are not limited this way, because the user's own site can be a local dev server.
@@ -57,6 +75,7 @@ Tests after the gap fixes: 1219 passing, 5 skipped. Type check: 0 errors.
 ### Notes for the next build
 
 - New dependency: `defusedxml`. Not merged; do not rebuild the exe from this branch yet.
+- New dependencies from `fix/feed-tls`: `truststore` and `certifi`. PyInstaller may need `--hidden-import truststore`, because it is imported inside a function, and certifi needs `--collect-data certifi` for its `cacert.pem`. Without them the exe still verifies, with the default context only, and the BSI feed fails again on machines that lack the D-TRUST root.
 - `feed.db` is written next to `settings.json` and is gitignored.
 
 ---
