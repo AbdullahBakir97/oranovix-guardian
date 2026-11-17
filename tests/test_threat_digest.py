@@ -187,3 +187,18 @@ def test_not_checked_replaces_the_headline_and_calls_no_project_clear() -> None:
     nothing = DigestBuilder.build([], [SHOP], VISIT, not_checked=reason)
     assert nothing.headline == reason and "Nothing new" not in nothing.text
     assert DigestBuilder.build([], [SHOP], VISIT).checked is True
+
+
+def test_affecting_item_without_a_fix_says_so() -> None:
+    no_fix = ProjectMatch(
+        project="Shop", project_path="/srv/shop", package="oldlib", ecosystem="PyPI",
+        version="1.0.0", advisory_id="CVE-2031-0001", severity=Severity.HIGH,
+    )
+    items = [stored("kev-2", "CVE-2031-0001: oldlib", Relevance.AFFECTS_YOU, matches=(no_fix,), exploited=True)]
+
+    digest = DigestBuilder.build(items, [SHOP], VISIT)
+
+    assert "  Shop: oldlib 1.0.0 (CVE-2031-0001), no fixed version known" in digest.text.splitlines()
+    assert "no fixed version known" in digest.html
+    guess = DigestBuilder.build(sample(), [SHOP, BLOG], VISIT)
+    assert "  Blog: lodash 4.17.21" in guess.text.splitlines()

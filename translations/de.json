@@ -371,5 +371,9 @@
   "tf_not_checked_no_projects": "Nicht gepr\u00fcft: F\u00fcgen Sie Ihre Projekte auf der Seite Meine Projekte hinzu.",
   "tf_not_checked_no_database": "Nicht gepr\u00fcft: Aktualisieren Sie die Schwachstellen-Datenbank in den Einstellungen.",
   "proj_feed_unchecked": "Nicht gepr\u00fcft",
-  "tf_show_newest": "Zur\u00fcck zur ersten Seite"
+  "tf_show_newest": "Zur\u00fcck zur ersten Seite",
+  "tf_src_cert_untrusted": "Das Zertifikat dieser Seite wird von Ihrem System nicht als vertrauensw\u00fcrdig eingestuft.",
+  "tf_not_checked_partial": "Nur teilweise gepr\u00fcft: {source} konnte nicht gelesen werden.",
+  "tf_match_no_fix": "keine behobene Version bekannt",
+  "digest_no_fix": "keine behobene Version bekannt"
 }

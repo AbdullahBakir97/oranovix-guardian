@@ -41,7 +41,7 @@ def used_keys() -> Set[str]:
     keys.update(check.text_key for check in CheckState if check is not CheckState.CHECKED)
     keys.update(f"digest_{name}" for name in (
         "headline", "nothing_new", "affecting", "possible", "other", "more",
-        "exploited", "fix", "projects", "project_line", "project_clear",
+        "exploited", "fix", "no_fix", "projects", "project_line", "project_clear",
     ))
     return {key for key in keys if not key.endswith("_")}
 
@@ -270,7 +270,7 @@ def test_switched_off_wins_over_every_other_reason() -> None:
 def test_not_checked_texts_differ_from_the_all_clear(language: str) -> None:
     texts = json.loads((TRANSLATIONS / f"{language}.json").read_text(encoding="utf-8"))
     reasons = [texts[check.text_key] for check in CheckState if check is not CheckState.CHECKED]
-    assert len(set(reasons)) == 5
+    assert len(set(reasons)) == 6
     assert texts["tf_empty_for_you"] not in reasons
     assert texts["proj_feed_unchecked"] != texts["proj_feed_clear"]
 
@@ -280,3 +280,149 @@ def test_project_feed_cell_says_not_checked(english: LanguageManager) -> None:
 
     assert ProjectsPage.feed_text(row(checked=False)) == ("Not checked", "warning")
     assert ProjectsPage.feed_text(row(checked=False, affecting=1)) == ("1 affect it", "critical")
+
+
+# ---------------------------------------------------------------------------
+# Certificate errors in the Sources tab
+# ---------------------------------------------------------------------------
+
+def test_certificate_error_of_a_source_is_explained(english: LanguageManager) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+    from threat_intel.fetcher import CertificateError
+
+    on = SourceConfig("BSI", "https://wid.example.org/rss")
+    technical = "[SSL: CERTIFICATE_VERIFY_FAILED] self-signed certificate in certificate chain"
+    stored_error = str(CertificateError(technical))
+
+    text, level = ThreatFeedPage.source_status(on, SourceHealth("BSI", None, stored_error, NOW))
+
+    assert text == f"The certificate of this site is not trusted by your system.\n{technical}"
+    assert level == "error"
+
+
+@pytest.mark.parametrize("error", [
+    "URLError: timed out", "The server answered with status 503.",
+    "SSLError: [SSL: WRONG_VERSION_NUMBER] wrong version number", "The feed is not valid XML.",
+])
+def test_other_source_errors_are_shown_as_they_are(english: LanguageManager, error: str) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    on = SourceConfig("News", "https://news.example.org/feed")
+    assert ThreatFeedPage.source_status(on, SourceHealth("News", None, error, NOW)) == (error, "error")
+
+
+# ---------------------------------------------------------------------------
+# Partly checked
+# ---------------------------------------------------------------------------
+
+def test_for_you_tab_says_partly_checked_when_the_catalog_failed(english: LanguageManager) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    current = state(failed_catalogs=("CISA KEV",))
+
+    assert current.check is CheckState.PARTIAL and not current.checked
+    assert ThreatFeedPage.empty_text(current, for_you=True) == "Partly checked: CISA KEV could not be read."
+
+
+def test_stronger_reasons_come_before_partly_checked() -> None:
+    assert state(failed_catalogs=("CISA KEV",), database_ready=False).check is CheckState.NO_DATABASE
+    assert state(failed_catalogs=("CISA KEV",), enabled=False).check is CheckState.OFF
+
+
+@pytest.mark.parametrize("language", ["en", "de", "ar"])
+def test_partly_checked_names_the_source_in_every_language(language: str) -> None:
+    lm = LanguageManager()
+    before = lm.current_lang
+    lm.set_language(language)
+    try:
+        text = state(failed_catalogs=("CISA KEV",)).not_checked_text(lm.t)
+    finally:
+        lm.set_language(before)
+    assert "CISA KEV" in text and text != lm.t("tf_empty_for_you")
+
+
+# ---------------------------------------------------------------------------
+# No fixed version
+# ---------------------------------------------------------------------------
+
+NO_FIX = ProjectMatch(
+    project="Shop", project_path="/srv/shop", package="oldlib", ecosystem="PyPI", version="1.0.0",
+    advisory_id="CVE-2031-0001", severity=Severity.HIGH,
+)
+
+
+def test_affecting_item_without_a_fix_says_so(english: LanguageManager) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    lines = ThreatFeedPage.match_lines(stored(Relevance.AFFECTS_YOU, (NO_FIX,)))
+    assert lines == ["Shop: oldlib 1.0.0 (CVE-2031-0001)  →  no fixed version known"]
+
+
+def test_a_guess_says_nothing_about_fixes(english: LanguageManager) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    guess = ProjectMatch("Blog", "/srv/blog", "lodash", "npm", "4.17.21")
+    assert ThreatFeedPage.match_lines(stored(Relevance.POSSIBLE, (guess,)))[1] == "Blog: lodash 4.17.21"
+
+
+@pytest.mark.parametrize("language, text", [
+    ("en", "no fixed version known"), ("de", "keine behobene Version bekannt"),
+])
+def test_no_fix_text_in_the_translations(language: str, text: str) -> None:
+    texts = json.loads((TRANSLATIONS / f"{language}.json").read_text(encoding="utf-8"))
+    assert texts["tf_match_no_fix"] == text == texts["digest_no_fix"]
+
+
+# ---------------------------------------------------------------------------
+# Read state: only the user marks an affecting item as read
+# ---------------------------------------------------------------------------
+
+class FakePage:
+    """The parts of the page that ``_open`` and ``on_shown`` touch. No window."""
+
+    def __init__(self) -> None:
+        self.marked: List[str] = []
+        self.visits = 0
+        page = self
+
+        class Store:
+            def set_last_visit(self) -> None:
+                page.visits += 1
+
+            def __getattr__(self, name: str) -> Any:
+                raise AssertionError(f"the page must not call store.{name} here")
+
+        class Hub:
+            store = Store()
+
+        self._hub = Hub()
+
+    def _mark_read(self, item_id: str) -> None:
+        self.marked.append(item_id)
+
+
+def test_opening_the_page_marks_nothing_as_read() -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    page = FakePage()
+    ThreatFeedPage.on_shown(page)       # type: ignore[arg-type]
+
+    assert page.visits == 1 and page.marked == []
+
+
+@pytest.mark.parametrize("relevance, marked", [
+    (Relevance.AFFECTS_YOU, []), (Relevance.POSSIBLE, ["id"]), (Relevance.GENERAL, ["id"]),
+])
+def test_opening_a_link_never_marks_an_affecting_item_as_read(
+    monkeypatch: pytest.MonkeyPatch, relevance: Relevance, marked: List[str]
+) -> None:
+    from gui import threat_feed_dialogs
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    monkeypatch.setattr(threat_feed_dialogs.LinkOpener, "open", classmethod(lambda cls, master, url: True))
+    page = FakePage()
+    page.read_when_opened = ThreatFeedPage.read_when_opened     # type: ignore[attr-defined]
+
+    ThreatFeedPage._open(page, stored(relevance, (MATCH,) if relevance is Relevance.AFFECTS_YOU else ()))  # type: ignore[arg-type]
+
+    assert page.marked == marked

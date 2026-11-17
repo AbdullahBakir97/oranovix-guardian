@@ -17,6 +17,7 @@ import customtkinter as ctk
 from core.language_manager import LanguageManager
 from gui.theme_manager import ThemeManager
 from gui.threat_feed_dialogs import FeedConsentDialog, LinkOpener
+from threat_intel.fetcher import CertificateError
 from threat_intel.hub import HubState, ThreatIntelHub
 from threat_intel.models import ProjectMatch, Relevance, SourceHealth, StoredItem
 from threat_intel.sources import SourceConfig
@@ -305,9 +306,7 @@ class ThreatFeedPage(ctk.CTkFrame):
         lm = LanguageManager()
         if not for_you:
             return lm.t("tf_empty_all")
-        if state.checked:
-            return lm.t("tf_empty_for_you")
-        return lm.t(state.check.text_key)
+        return state.not_checked_text(lm.t) or lm.t("tf_empty_for_you")
 
     def _clear(self) -> None:
         self._fill_run += 1         # a fill that is still running stops
@@ -435,6 +434,9 @@ class ThreatFeedPage(ctk.CTkFrame):
             line += f" ({match.advisory_id})"
         if match.fixed_version:
             line += "  →  " + lm.t("tf_match_fix", version=match.fixed_version)
+        elif match.confirmed:
+            # A confirmed hit without a fix must not look like a line that was cut off.
+            line += "  →  " + lm.t("tf_match_no_fix")
         return line
 
     def _render_sources(self, health: Sequence[Tuple[SourceConfig, SourceHealth]]) -> None:
@@ -477,6 +479,9 @@ class ThreatFeedPage(ctk.CTkFrame):
             return lm.t("tf_src_disabled"), "text3"
         if health.ok:
             return lm.t("tf_src_ok"), "success"
+        if CertificateError.is_text_of(health.last_error):
+            detail = CertificateError.detail_of(health.last_error)
+            return f"{lm.t('tf_src_cert_untrusted')}\n{detail}", "error"
         if health.last_error:
             return health.last_error, "error"
         return lm.t("tf_src_never"), "text3"
@@ -508,11 +513,23 @@ class ThreatFeedPage(ctk.CTkFrame):
         self._hub.notify()
 
     def _open(self, stored: StoredItem) -> None:
-        if LinkOpener.open(self, stored.item.url):
+        if LinkOpener.open(self, stored.item.url) and self.read_when_opened(stored):
             self._mark_read(stored.id)
 
+    @staticmethod
+    def read_when_opened(stored: StoredItem) -> bool:
+        """Opening the link of a news item counts as reading it.
+
+        An item that affects a project stays unread, and in the badge,
+        until the user presses "Mark read" or "Mark all read".
+        """
+        return stored.relevance is not Relevance.AFFECTS_YOU
+
     def on_shown(self) -> None:
-        """The user opened the page: from now on "new" means newer than this visit."""
+        """The user opened the page: from now on "new" means newer than this visit.
+
+        Only the visit time is stored. No item becomes read by this.
+        """
         self._hub.store.set_last_visit()
 
     def refresh_theme(self) -> None:
