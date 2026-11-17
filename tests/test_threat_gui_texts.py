@@ -371,3 +371,58 @@ def test_a_guess_says_nothing_about_fixes(english: LanguageManager) -> None:
 def test_no_fix_text_in_the_translations(language: str, text: str) -> None:
     texts = json.loads((TRANSLATIONS / f"{language}.json").read_text(encoding="utf-8"))
     assert texts["tf_match_no_fix"] == text == texts["digest_no_fix"]
+
+
+# ---------------------------------------------------------------------------
+# Read state: only the user marks an affecting item as read
+# ---------------------------------------------------------------------------
+
+class FakePage:
+    """The parts of the page that ``_open`` and ``on_shown`` touch. No window."""
+
+    def __init__(self) -> None:
+        self.marked: List[str] = []
+        self.visits = 0
+        page = self
+
+        class Store:
+            def set_last_visit(self) -> None:
+                page.visits += 1
+
+            def __getattr__(self, name: str) -> Any:
+                raise AssertionError(f"the page must not call store.{name} here")
+
+        class Hub:
+            store = Store()
+
+        self._hub = Hub()
+
+    def _mark_read(self, item_id: str) -> None:
+        self.marked.append(item_id)
+
+
+def test_opening_the_page_marks_nothing_as_read() -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    page = FakePage()
+    ThreatFeedPage.on_shown(page)       # type: ignore[arg-type]
+
+    assert page.visits == 1 and page.marked == []
+
+
+@pytest.mark.parametrize("relevance, marked", [
+    (Relevance.AFFECTS_YOU, []), (Relevance.POSSIBLE, ["id"]), (Relevance.GENERAL, ["id"]),
+])
+def test_opening_a_link_never_marks_an_affecting_item_as_read(
+    monkeypatch: pytest.MonkeyPatch, relevance: Relevance, marked: List[str]
+) -> None:
+    from gui import threat_feed_dialogs
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    monkeypatch.setattr(threat_feed_dialogs.LinkOpener, "open", classmethod(lambda cls, master, url: True))
+    page = FakePage()
+    page.read_when_opened = ThreatFeedPage.read_when_opened     # type: ignore[attr-defined]
+
+    ThreatFeedPage._open(page, stored(relevance, (MATCH,) if relevance is Relevance.AFFECTS_YOU else ()))  # type: ignore[arg-type]
+
+    assert page.marked == marked

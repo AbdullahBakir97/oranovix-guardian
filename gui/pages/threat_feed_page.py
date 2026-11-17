@@ -513,11 +513,23 @@ class ThreatFeedPage(ctk.CTkFrame):
         self._hub.notify()
 
     def _open(self, stored: StoredItem) -> None:
-        if LinkOpener.open(self, stored.item.url):
+        if LinkOpener.open(self, stored.item.url) and self.read_when_opened(stored):
             self._mark_read(stored.id)
 
+    @staticmethod
+    def read_when_opened(stored: StoredItem) -> bool:
+        """Opening the link of a news item counts as reading it.
+
+        An item that affects a project stays unread, and in the badge,
+        until the user presses "Mark read" or "Mark all read".
+        """
+        return stored.relevance is not Relevance.AFFECTS_YOU
+
     def on_shown(self) -> None:
-        """The user opened the page: from now on "new" means newer than this visit."""
+        """The user opened the page: from now on "new" means newer than this visit.
+
+        Only the visit time is stored. No item becomes read by this.
+        """
         self._hub.store.set_last_visit()
 
     def refresh_theme(self) -> None:
