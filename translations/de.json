@@ -428,5 +428,9 @@
   "ls_rule_ls301": "Eine eingeschleuste Datei wird abgerufen: m\u00f6glicherweise wird eine Web-Shell benutzt",
   "ls_rule_ls301_explain": "Live-Schutz hat eine neue oder ge\u00e4nderte Datei in einem \u00f6ffentlichen Ordner gefunden, und der Webserver liefert genau diese Datei jetzt aus. Ist es Code, benutzt ein Angreifer sie wahrscheinlich. Nehmen Sie die Website vom Netz oder sperren Sie die Datei, dann untersuchen Sie den Vorfall.",
   "ls_reason_pattern": "Erkannt: {evidence}",
-  "ls_reason_answered": "der Server antwortete {status}"
+  "ls_reason_answered": "der Server antwortete {status}",
+  "ls_reason_failed_logins": "{count} fehlgeschlagene Anmeldungen auf {path} innerhalb von {minutes} Minuten",
+  "ls_reason_login_success": "nach den fehlgeschlagenen Anmeldungen antwortete der Server {status} auf {path}",
+  "ls_reason_scan_paths": "{count} verschiedene nicht vorhandene Pfade innerhalb von {minutes} Minuten",
+  "ls_reason_flood": "mehr als {limit} Anfragen in einer Minute"
 }

@@ -452,5 +452,9 @@
   "ls_rule_ls301": "A planted file is being requested: possible web shell in use",
   "ls_rule_ls301_explain": "Live Defense found a new or changed file in a public folder, and the web server is now handing that file out. If it is code, an attacker is probably using it. Take the site offline or block the file, then investigate.",
   "ls_reason_pattern": "Matched: {evidence}",
-  "ls_reason_answered": "the server answered {status}"
+  "ls_reason_answered": "the server answered {status}",
+  "ls_reason_failed_logins": "{count} failed logins on {path} within {minutes} minutes",
+  "ls_reason_login_success": "after the failed logins the server answered {status} on {path}",
+  "ls_reason_scan_paths": "{count} different missing paths within {minutes} minutes",
+  "ls_reason_flood": "more than {limit} requests in one minute"
 }
