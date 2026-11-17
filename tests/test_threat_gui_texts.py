@@ -41,7 +41,7 @@ def used_keys() -> Set[str]:
     keys.update(check.text_key for check in CheckState if check is not CheckState.CHECKED)
     keys.update(f"digest_{name}" for name in (
         "headline", "nothing_new", "affecting", "possible", "other", "more",
-        "exploited", "fix", "projects", "project_line", "project_clear",
+        "exploited", "fix", "no_fix", "projects", "project_line", "project_clear",
     ))
     return {key for key in keys if not key.endswith("_")}
 
@@ -339,3 +339,35 @@ def test_partly_checked_names_the_source_in_every_language(language: str) -> Non
     finally:
         lm.set_language(before)
     assert "CISA KEV" in text and text != lm.t("tf_empty_for_you")
+
+
+# ---------------------------------------------------------------------------
+# No fixed version
+# ---------------------------------------------------------------------------
+
+NO_FIX = ProjectMatch(
+    project="Shop", project_path="/srv/shop", package="oldlib", ecosystem="PyPI", version="1.0.0",
+    advisory_id="CVE-2031-0001", severity=Severity.HIGH,
+)
+
+
+def test_affecting_item_without_a_fix_says_so(english: LanguageManager) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    lines = ThreatFeedPage.match_lines(stored(Relevance.AFFECTS_YOU, (NO_FIX,)))
+    assert lines == ["Shop: oldlib 1.0.0 (CVE-2031-0001)  →  no fixed version known"]
+
+
+def test_a_guess_says_nothing_about_fixes(english: LanguageManager) -> None:
+    from gui.pages.threat_feed_page import ThreatFeedPage
+
+    guess = ProjectMatch("Blog", "/srv/blog", "lodash", "npm", "4.17.21")
+    assert ThreatFeedPage.match_lines(stored(Relevance.POSSIBLE, (guess,)))[1] == "Blog: lodash 4.17.21"
+
+
+@pytest.mark.parametrize("language, text", [
+    ("en", "no fixed version known"), ("de", "keine behobene Version bekannt"),
+])
+def test_no_fix_text_in_the_translations(language: str, text: str) -> None:
+    texts = json.loads((TRANSLATIONS / f"{language}.json").read_text(encoding="utf-8"))
+    assert texts["tf_match_no_fix"] == text == texts["digest_no_fix"]

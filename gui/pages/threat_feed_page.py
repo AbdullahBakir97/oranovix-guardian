@@ -434,6 +434,9 @@ class ThreatFeedPage(ctk.CTkFrame):
             line += f" ({match.advisory_id})"
         if match.fixed_version:
             line += "  →  " + lm.t("tf_match_fix", version=match.fixed_version)
+        elif match.confirmed:
+            # A confirmed hit without a fix must not look like a line that was cut off.
+            line += "  →  " + lm.t("tf_match_no_fix")
         return line
 
     def _render_sources(self, health: Sequence[Tuple[SourceConfig, SourceHealth]]) -> None:

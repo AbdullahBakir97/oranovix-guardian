@@ -30,13 +30,14 @@ class DigestTexts:
     more: str = "and {count} more"
     exploited: str = "exploited in the wild"
     fix: str = "fixed in {version}"
+    no_fix: str = "no fixed version known"
     projects: str = "Your projects"
     project_line: str = "{name}: {count} item(s) affect it"
     project_clear: str = "{name}: nothing new affects it"
 
     KEYS = (
         "headline", "nothing_new", "affecting", "possible", "other", "more",
-        "exploited", "fix", "projects", "project_line", "project_clear",
+        "exploited", "fix", "no_fix", "projects", "project_line", "project_clear",
     )
 
     @classmethod
@@ -158,6 +159,8 @@ class DigestBuilder:
             line += f" ({match.advisory_id})"
         if match.fixed_version:
             line += f", {texts.fix.format(version=match.fixed_version)}"
+        elif match.confirmed:
+            line += f", {texts.no_fix}"
         return line
 
     @staticmethod
