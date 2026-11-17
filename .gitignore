@@ -75,3 +75,4 @@ tests/corpus/**/__pycache__/
 # Log Sentinel
 security_events.db
 log_sentinel_state.db
+!assets/sample_access.log

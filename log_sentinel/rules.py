@@ -323,6 +323,8 @@ class Log4ShellRule(AttackRule):
     rule_id = "LS108"
     category = AttackCategory.LOG4J
     severity = Severity.HIGH
+    # The lookup works out of band (the server calls the attacker); a 200 says nothing.
+    raise_on_success = False
 
     # ${lower:j}, ${upper:J}, ${::-j} and ${env:X:-j} all become j
     _LOOKUP = re.compile(r"\$\{(?:lower:|upper:|::-|(?:env|sys|date|main):[^:{}$]{0,20}:-)([^${}]{0,10})\}")
