@@ -14,6 +14,8 @@
 
 [Setup]
 AppName=Oranovix Guardian
+; Paths below are relative to the project root, not to build_tools.
+SourceDir=..
 AppVersion=1.1.0
 AppPublisher=Oranovix
 AppPublisherURL=https://oranovix.com
@@ -31,7 +33,8 @@ WizardStyle=modern
 ; Require Windows 10 or later
 MinVersion=10.0
 ; 64-bit only
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
