@@ -214,7 +214,8 @@ class FileIntegrityMonitor(Monitor):
         too_large = False
         if change is not ChangeType.DELETED and link is None:
             hits = WebShellDetector.scan_file(path)
-            findings = self._scan_file(path)
+            # Capped here, so the findings handed to the alarm match the event.
+            findings = self._classifier.cap_findings(change, self._scan_file(path))
             too_large = info is not None and WebShellDetector.too_large(info.size)
         severity, reasons = self._classifier.classify(
             change, relative, hits, findings,

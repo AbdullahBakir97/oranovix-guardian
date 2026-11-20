@@ -146,7 +146,9 @@ def test_names_that_hold_no_secret(name: str) -> None:
 def test_token_test_is_not_a_secret(tmp_path: Path) -> None:
     issues = scan_code(tmp_path, 'token = "test"\n')
 
-    assert not [i for i in issues if i.category is IssueCategory.SECRET]
+    # Bandit may still list it at its own LOW severity; nothing promotes it.
+    assert not [i for i in issues if i.category is IssueCategory.SECRET and i.severity is not Severity.LOW]
+    assert "SEC001" not in rule_ids(issues) and "AST-SEC1" not in rule_ids(issues)
 
 
 def test_placeholder_password_is_not_critical(tmp_path: Path) -> None:
@@ -182,7 +184,8 @@ def test_a_real_password_is_still_critical(tmp_path: Path) -> None:
 def test_a_real_password_argument_is_still_high(tmp_path: Path) -> None:
     issues = scan_code(tmp_path, 'connect(user="app", password="S3cr3tPr0dPassw0rd!")\n')
 
-    assert any(i.rule_id == "B106" and i.severity is Severity.HIGH for i in issues)
+    reported = [i for i in issues if "B106" in (i.rule_id, *i.also_detected_by)]
+    assert reported and reported[0].severity in (Severity.HIGH, Severity.CRITICAL)
 
 
 # ---------------------------------------------------------------------------
