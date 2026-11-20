@@ -50,6 +50,27 @@ Known limits:
 - The placeholder list is a heuristic. A real password shorter than 8 characters is no longer promoted; Bandit still lists it with its own (LOW) severity.
 - Command execution keeps its scanner severity in a changed file, not only code execution: an existing test requires a CRITICAL command-execution finding in a modified file to stay CRITICAL.
 
+### Phase 3: scanner robustness (branch `fix/scanner-robustness`)
+
+Problem: a Python file with a 100,000-term expression raised RecursionError in the AST analyzer; the Python engine only caught OSError, so it aborted and every file sorted after it lost its Django, settings and AST findings (DJ005, DS001, SEC001 disappeared after adding `aaa_data.py`). Symlinks out of the project were read, imported regexes were never checked, and `migrations` was never scanned.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | `BaseScanner.isolated` runs one file (or one analyzer on one file) and turns any exception, including RecursionError and MemoryError, into the warning `<file>: not analysed (<what>: <reason>)`; the scan goes on. The Python engine isolates its regex checks, AST rules, Django rules and Django settings rules separately per file. `scan_each` does the same for the JS, PHP, Java, C#, template and secrets scanners; the orchestrator does it for the rule engine. | `scanner_engine/base.py`, `scanner_engine/python_scanner.py`, the scanners, `scanner_engine/orchestrator.py` |
+| 2 | Files above 5 MB (`BaseScanner.MAX_FILE_BYTES`) are not read; they appear once in the warnings ("larger than 5 MB"). The orchestrator drops duplicate warnings. Bandit gets the same capped list. | `scanner_engine/base.py`, `scanner_engine/orchestrator.py` |
+| 3 | `collect_files` (and the manifest walker) follow a symlink or junction only when its real path is inside the scan root. | `scanner_engine/base.py`, `scanner_engine/deps/manifests.py` |
+| 4 | Custom rules: each pattern is compiled once per process (`lru_cache`). Invalid regexes, and repeated groups that contain a repeat or alternatives (`(a+)+`, `(\w*)*`, `(a|aa)*`), are refused with a message: on import (shown in a dialog), on "add rule" (shown in the dialog), and on every load, so a file saved by an older version cannot hang a scan either (listed in the scan warnings). Rules run line by line on the first 1000 characters of each line. | `scanner_engine/rule_engine.py`, `gui/pages/settings_page.py` |
+| 5 | Folders: `venv`, `.venv`, `node_modules`, `.git`, `site-packages`, `__pycache__`, `dist` are still skipped. `migrations` is scanned. `env` and `build` are skipped only when they hold a virtual environment (`pyvenv.cfg`) or build output (setuptools `bdist.*`/`lib.*`/`temp.*`, PyInstaller `.toc` files, CMake). A folder with `pyvenv.cfg` is skipped under any name. | `scanner_engine/base.py` |
+
+Tests: 1925 passing, 6 skipped (39 new; the new file-symlink test skips because this account may not create symlinks, the junction tests run). Type check: `uvx pyright`, 0 errors. Findings on `tests/corpus` unchanged.
+
+Known limits:
+
+- The pattern check is a heuristic. It refuses some harmless patterns (`(?:foo|bar)+`; a character class or a non-repeated group works instead), and polynomial patterns such as `\w*\w*\w*x` pass it; the 1000-character line cap keeps those bounded but not instant.
+- Rules see only the first 1000 characters of a line: a match further right in minified code is missed.
+- A file the antivirus locks is read as empty by the line scanners (unchanged behaviour); only the Python engine reports it as unreadable.
+- Generated `build` folders are recognised by setuptools, PyInstaller and CMake markers only; other build output is scanned.
+
 ## Log Sentinel (branch `feature/log-sentinel`)
 
 Goal: read the web server's access logs on this computer, report attacks, and link them with the file integrity monitor. Detection only: nothing is blocked and nothing from the logs is sent anywhere.
