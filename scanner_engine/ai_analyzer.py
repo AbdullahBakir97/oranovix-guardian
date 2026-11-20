@@ -12,7 +12,7 @@ API call fails.
 Key classes:
   - ``AIAnalysis``      — frozen dataclass holding the structured AI response.
   - ``BaseAIAnalyzer``  — ABC declaring the ``analyze`` / ``is_available`` contract.
-  - ``GeminiAnalyzer``  — live implementation backed by ``google.generativeai``.
+  - ``GeminiAnalyzer``  — live implementation backed by the ``google-genai`` SDK.
   - ``NoOpAnalyzer``    — null-object used when AI is disabled or not configured.
 
 Version: 1.1.0
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from core.redactor import Redactor
 
@@ -96,10 +96,21 @@ class BaseAIAnalyzer(ABC):
 # Gemini implementation
 # ---------------------------------------------------------------------------
 
+class _GenAIModel:
+    """One model of a ``google.genai`` client, with the one call this module needs."""
+
+    def __init__(self, client: Any, model: str) -> None:
+        self._client = client
+        self._model = model
+
+    def generate_content(self, prompt: str) -> Any:
+        return self._client.models.generate_content(model=self._model, contents=prompt)
+
+
 class GeminiAnalyzer(BaseAIAnalyzer):
     """AI analyzer backed by the Google Gemini generative model (free tier).
 
-    On construction the analyzer attempts to configure the ``google.generativeai``
+    On construction the analyzer attempts to create a ``google.genai``
     client with the provided (or environment-sourced) API key.  All failures
     are handled silently so that the rest of the application continues to work
     without AI enrichment.
@@ -129,17 +140,15 @@ class GeminiAnalyzer(BaseAIAnalyzer):
             self._init_client()
 
     def _init_client(self) -> None:
-        """Configure the ``google.generativeai`` client and create the model handle.
+        """Create the ``google.genai`` client for the configured model.
 
-        Swallows all exceptions (import errors, network errors, invalid keys) so
-        that a missing or misconfigured ``google-generativeai`` package does not
-        crash the application at startup.
+        Swallows all exceptions (import errors, invalid keys) so that a missing
+        or misconfigured ``google-genai`` package does not crash the
+        application at startup.
         """
         try:
-            from google.generativeai.client import configure  # type: ignore
-            from google.generativeai.generative_models import GenerativeModel  # type: ignore
-            configure(api_key=self._api_key)
-            self._client = GenerativeModel(self._model)
+            from google import genai
+            self._client = _GenAIModel(genai.Client(api_key=self._api_key), self._model)
         except Exception as exc:
             # Leave self._client as None; is_available() will return False.
             self._client = None
@@ -159,7 +168,8 @@ class GeminiAnalyzer(BaseAIAnalyzer):
 
     @staticmethod
     def _is_model_not_found(exc: Exception) -> bool:
-        return type(exc).__name__ == "NotFound" or "404" in str(exc)
+        # google-genai raises errors.ClientError with code 404.
+        return getattr(exc, "code", None) == 404 or type(exc).__name__ == "NotFound" or "404" in str(exc)
 
     def is_available(self) -> bool:
         """Return True only when both an API key and a live client are present.
