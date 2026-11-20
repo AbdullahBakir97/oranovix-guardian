@@ -5,7 +5,7 @@
 <h1 align="center">Oranovix Guardian</h1>
 
 <p align="center">
-  <strong>Professional Code Security Scanner — 100% Offline, 100% Free</strong>
+  <strong>Professional Code Security Scanner — Scans offline, optional online AI, 100% Free</strong>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 
 ## What is Oranovix Guardian?
 
-Oranovix Guardian is a **professional desktop security scanner** that detects vulnerabilities in source code across five languages — entirely offline, with no telemetry, no account required, and no subscription. Drop a file or folder onto the scanner, click **Scan**, and get an instant risk report with actionable recommendations and optional AI-powered deep analysis.
+Oranovix Guardian is a **professional desktop security scanner** that detects vulnerabilities in source code across five languages. Scans run offline, with no telemetry, no account required, and no subscription. Drop a file or folder onto the scanner, click **Scan**, and get an instant risk report with actionable recommendations and optional AI-powered deep analysis. The AI analysis is the only part that sends code to an online service (Google Gemini), and only after you allow it; secrets are removed before anything is sent.
 
 ---
 
@@ -52,8 +52,8 @@ Oranovix Guardian is a **professional desktop security scanner** that detects vu
 
 ### Download the pre-built executable (Windows)
 
-1. Download **`Oranovix Guardian.exe`** from the [Releases](../../releases) page.
-2. Double-click to run — no installation required.
+1. Download **`Oranovix_Guardian_Setup_v1.1.0.exe`** from the [Releases](../../releases) page.
+2. Run it. The app is installed to `C:\Program Files\Oranovix Guardian`; a normal (non-admin) user can run it.
 
 ### Run from source
 
@@ -68,7 +68,7 @@ venv\Scripts\activate          # Windows
 # source venv/bin/activate     # macOS / Linux
 
 # 3. Install dependencies
-pip install -r requirements.txt
+pip install -r src/requirements.txt
 
 # 4. Run
 python main.py
@@ -78,17 +78,31 @@ python main.py
 
 ## Build the Executable
 
-```bash
-venv\Scripts\pyinstaller --onefile --windowed ^
-  --icon=assets/icon.ico ^
-  --name="Oranovix Guardian" ^
-  --add-data="assets;assets" ^
-  --add-data="translations;translations" ^
-  --hidden-import keyring.backends.Windows ^
-  main.py
+```powershell
+powershell -ExecutionPolicy Bypass -File build_tools\build.ps1
 ```
 
-The output is placed in `dist\Oranovix Guardian.exe` (~24 MB).
+The script runs PyInstaller with every flag the build needs (`--collect-all bandit --collect-all stevedore --copy-metadata bandit --hidden-import keyring.backends.Windows --hidden-import truststore --collect-data certifi`, plus the bundled assets, translations and default rules) and then Inno Setup 6. Results: `dist\Oranovix Guardian.exe` and `dist\Oranovix_Guardian_Setup_v1.1.0.exe`. Use `-NoInstaller` to build only the exe.
+
+---
+
+## Where your data is
+
+The installed app never writes into its own folder in Program Files. Everything it saves lives in one data folder per Windows user:
+
+```
+%LOCALAPPDATA%\Oranovix Guardian    settings.json            theme, sound, AI consent, monitors, feed sources
+    scan_history.db          scan history and the memory of alarms already raised
+    integrity.db             Live Defense baselines
+    feed.db                  Threat Feed, projects, uptime history
+    security_events.db       Log Sentinel events
+    log_sentinel_state.db    how far each log has been read
+    osv.db                   vulnerability database for the dependency scan
+    rules\custom_rules.json  your own rules
+    reports\output\          PDF reports
+```
+
+If `%LOCALAPPDATA%` is not set, `%APPDATA%` is used, then your home folder. Running from source keeps the data in the project folder. The environment variable `ORANOVIX_DATA_DIR` sets another folder. Data an older version left next to the exe is copied over once on the first start; the old files are not deleted. Uninstalling keeps the data folder. API keys are not in this folder: they are kept in the Windows Credential Manager.
 
 ---
 
@@ -175,4 +189,4 @@ Pull requests are welcome. For major changes, please open an issue first to disc
 
 ---
 
-<p align="center">Made with ❤️ — 100% free, 100% offline</p>
+<p align="center">Made with ❤️ — 100% free, scans offline</p>
