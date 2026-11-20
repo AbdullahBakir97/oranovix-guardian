@@ -688,6 +688,7 @@ class IssueAccordion(ctk.CTkFrame):
         the fix suggestion (fixed code + explanation + prevention + copy button)
         once the generator completes.
         """
+        from gui.ui_thread import on_ui_thread
         from scanner_engine.ai_fix_generator import AIFixGenerator
         from scanner_engine.gemini_config import GeminiConfig
         tm = ThemeManager()
@@ -720,8 +721,8 @@ class IssueAccordion(ctk.CTkFrame):
         fix_frame = ctk.CTkFrame(parent_frame, fg_color=tm.c("log_bg"),
                                   corner_radius=6)
 
-        def _on_fix(suggestion) -> None:
-            # Must update UI on the main thread
+        def _show_fix(suggestion) -> None:
+            # Runs on the Tk thread: on_ui_thread hands it over from the worker.
             try:
                 loading_lbl.pack_forget()
                 fix_frame.pack(fill="x", padx=0, pady=(0, 8))
@@ -815,7 +816,7 @@ class IssueAccordion(ctk.CTkFrame):
             except Exception:
                 pass  # widget may have been destroyed
 
-        generator.generate_fix_async(issue, issue.code_snippet, _on_fix)
+        generator.generate_fix_async(issue, issue.code_snippet, on_ui_thread(parent_frame, _show_fix))
 
     def _toggle(self, _=None) -> None:
         self._expanded = not self._expanded
