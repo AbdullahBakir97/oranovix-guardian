@@ -1,5 +1,34 @@
 # Oranovix Guardian — Development Progress
 
+## Fixes from the full audit (main @ f1d1b43)
+
+Every item was reproduced first by a failing test, then fixed. Baseline before the fixes: 1777 passing, 5 skipped, pyright 0 errors.
+
+### Phase 1: data location (branch `fix/data-location`)
+
+Problem: the installer puts the exe in Program Files, and the exe wrote every data file next to itself. For a normal user that folder is read-only, so the alarm center, the scan history, the feed and event stores and the OSV update failed with `sqlite3.OperationalError: unable to open database file`, and the AI consent was never saved.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | `AppPaths` is the only place that knows where data lives: `ORANOVIX_DATA_DIR` if set; the installed exe on Windows uses `%LOCALAPPDATA%\Oranovix Guardian` (then `%APPDATA%`, then the home folder); from source the project root as before. The folder is created on first use. Resources (assets, translations, `default_rules.json`, the sample log) come from the bundle (`sys._MEIPASS`). `DataFile` names every data file. | `core/app_paths.py` |
+| 2 | All stores take their path from `AppPaths`: settings, `scan_history.db` (also the alarm memory), `integrity.db`, `feed.db`, `security_events.db`, `log_sentinel_state.db`, `osv.db`, `rules/custom_rules.json`, `reports/output`. The six copies of the frozen/source path logic are gone. The rule engine now loads `default_rules.json` from the bundle; before, the exe looked for it next to itself and found nothing. | the stores, `scanner_engine/rule_engine.py`, `reports/pdf_generator.py`, `gui/pages/reports_page.py` |
+| 3 | `SettingsFile` owns `settings.json`: one lock per file for the whole process, read-modify-write under that lock, write to a temp file then `os.replace`. A file that does not parse (or is not an object) is renamed to `settings.json.corrupt-<timestamp>` instead of being overwritten with one section. ThemeManager, SoundManager, GeminiConfig, LiveDefenseSettings, ThreatFeedSettings and the Log Sentinel settings all use it. | `core/settings_file.py` |
+| 4 | `StorageProblems`: a failed write (settings, scan history, custom rules) is reported once per file. The window shows it in the status bar and a warning dialog that names the file, the reason and the data folder. Problems before the window exists are kept and shown when it does. | `core/storage_problems.py`, `gui/app.py` |
+| 5 | Migration: on start, data files that an older version wrote next to the exe are copied into the data folder, once (a marker file stops later copies). Existing files in the data folder are never overwritten; the old files are never deleted. | `core/app_paths.py`, `main.py` |
+| 6 | Single instance per data folder: a named mutex on Windows, an exclusive lock file elsewhere. A second start shows a message, brings the running window to the front and exits. | `core/single_instance.py`, `main.py` |
+| 7 | Installer: still `{autopf}`, no `settings.json` in `[Files]` (defaults come from the code), no `[UninstallDelete]` of runtime files in `{app}`. Version 1.1.0 everywhere (`core/version.py`, installer, status bar). | `build_tools/installer.iss`, `core/version.py`, `gui/status_bar.py` |
+| 8 | Tests: the exe is simulated with `sys.frozen` in a folder that is really read-only (chmod 555, plus an ACL deny entry on Windows, where chmod does not protect a folder); every store, the OSV update target, the consent, custom rules and the PDF output work and write into the data folder, and the install folder stays untouched. Migration, corrupt file, parallel writers, failed write reported once, second instance (in-process and as a second process), installer and version. The test session now sets `ORANOVIX_DATA_DIR` to a temp folder, so tests never write into the project root. | `tests/test_data_location.py`, `tests/conftest.py` |
+
+Tests: 1809 passing, 5 skipped (32 new). Type check: `uvx pyright`, 0 errors.
+
+Known limits:
+
+- The data folder is per Windows user. Two users on one machine each have their own settings, baselines and history.
+- Uninstalling keeps the data folder. It has to be deleted by hand to remove everything.
+- Migration copies only the known data files; old PDF reports in `{app}\reports\output` stay where they are.
+- The single-instance check is per data folder: a copy started with another `ORANOVIX_DATA_DIR` is allowed, because it does not share any database.
+- On Windows the second start finds the running window by its title; if it cannot be found, only the message is shown.
+
 ## Log Sentinel (branch `feature/log-sentinel`)
 
 Goal: read the web server's access logs on this computer, report attacks, and link them with the file integrity monitor. Detection only: nothing is blocked and nothing from the logs is sent anywhere.
