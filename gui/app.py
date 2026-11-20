@@ -91,6 +91,8 @@ class CodeGuardianApp(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         super().__init__()
+        # A second start finds this window by its title to bring it forward.
+        self.title("Oranovix Guardian")
 
         self._tm: ThemeManager  = tm
         self._lm: LanguageManager = LanguageManager()
@@ -237,8 +239,31 @@ class CodeGuardianApp(ctk.CTk):
         # Small delay before patching the taskbar entry; the HWND must be
         # fully visible for SetWindowLongW to take effect reliably.
         self.after(100, self._restore_taskbar_entry)
+        self.after(300, self._watch_storage_problems)
         self.after(400, self._offer_resumes)
         self.after(900, self._start_threat_feed)
+
+    def _watch_storage_problems(self) -> None:
+        """A write that fails (settings, history, rules) is shown once, not swallowed."""
+        from core.storage_problems import StorageProblems
+        StorageProblems.set_listener(lambda problem: self.after(0, self._show_storage_problem, problem))
+
+    def _show_storage_problem(self, problem) -> None:
+        from tkinter import messagebox
+        from core.app_paths import AppPaths
+        lm = LanguageManager()
+        what_key = "storage_what_" + problem.what.replace(" ", "_")
+        what = lm.t(what_key)
+        text = lm.t(
+            "storage_write_failed",
+            what=problem.what if what == what_key else what,
+            path=problem.path, reason=problem.reason, folder=str(AppPaths.data_dir()),
+        )
+        try:
+            self._status_bar.set_status(lm.t("storage_write_failed_title"), "error")
+        except tk.TclError:
+            pass
+        messagebox.showwarning(lm.t("storage_write_failed_title"), text, parent=self)
 
     # ------------------------------------------------------------------
     # UI construction

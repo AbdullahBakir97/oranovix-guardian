@@ -506,5 +506,11 @@
   "ls_resume_title": "Log Sentinel fortsetzen?",
   "ls_resume_text": "Log Sentinel hat diese Logs \u00fcberwacht, als die App geschlossen wurde:\n{logs}\n\u00dcberwachung wieder starten?",
   "ls_resume_yes": "\u00dcberwachung starten",
-  "ls_resume_no": "Nicht jetzt"
+  "ls_resume_no": "Nicht jetzt",
+  "already_running": "Oranovix Guardian l\u00e4uft bereits. Das offene Fenster wurde in den Vordergrund geholt.",
+  "storage_write_failed_title": "Daten konnten nicht gespeichert werden",
+  "storage_write_failed": "Oranovix Guardian konnte {what} nicht speichern.\n\nDatei: {path}\nGrund: {reason}\n\n\u00c4nderungen daran gehen beim Schlie\u00dfen verloren. Pr\u00fcfen Sie, ob der Datenordner beschreibbar ist:\n{folder}",
+  "storage_what_settings": "die Einstellungen",
+  "storage_what_scan_history": "den Scan-Verlauf",
+  "storage_what_custom_rules": "die eigenen Regeln"
 }

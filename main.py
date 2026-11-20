@@ -23,19 +23,32 @@ import os
 # simple top-level names regardless of the current working directory.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from core.app_paths import AppPaths
+from core.single_instance import SingleInstance, tell_already_running
 from gui.app import CodeGuardianApp
 
 
 def main() -> None:
     """Create the application window and start the Tkinter event loop.
 
-    This is the single entry point for the entire application.  It
-    instantiates :class:`~gui.app.CodeGuardianApp`, which internally
-    shows the splash screen and builds the full UI, then delegates
-    execution to ``mainloop()`` which blocks until the window is closed.
+    This is the single entry point for the entire application.  A second
+    copy on the same data folder only brings the running one to the front:
+    two copies would run their monitors on the same databases.  Data an
+    older version wrote next to the exe is copied into the data folder
+    once, before anything reads it.  Then :class:`~gui.app.CodeGuardianApp`
+    shows the splash screen and builds the full UI, and ``mainloop()``
+    blocks until the window is closed.
     """
-    app = CodeGuardianApp()
-    app.mainloop()
+    instance = SingleInstance.for_data_dir()
+    if not instance.acquire():
+        tell_already_running()
+        return
+    try:
+        AppPaths.migrate_legacy()
+        app = CodeGuardianApp()
+        app.mainloop()
+    finally:
+        instance.release()
 
 
 if __name__ == "__main__":
