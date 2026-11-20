@@ -90,6 +90,24 @@ Known limits:
 - The masker works on text patterns. A secret in an unusual form (no quotes, a name without a secret-like word, not a known token shape) can stay visible.
 - The PDF only: the results page in the app still shows the full snippet, as before.
 
+### Phase 5: AI privacy and UI (branch `fix/ai-and-ui`)
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | The AI fix suggestion was turned into widgets in the worker thread. `on_ui_thread(widget, fn)` hands the result to the Tk thread with `after(0, ...)` and drops it quietly when the window is gone; the results page uses it. | `gui/ui_thread.py`, `gui/pages/results_page.py` |
+| 2 | Redactor gaps. Shell scripts (`.sh`, `.bash`, `.zsh`, `.ps1`, including `$env:X=` and `$X =`) and Dockerfiles (`ENV`/`ARG`, with `=` or a space) are treated as settings files. `.pgpass`, `.htpasswd`, `.npmrc`, `.netrc`, `.git-credentials`, `.pypirc`: everything after the first `=`, `:` or space is data. The text of XML/HTML elements whose name holds a secret word (`<password>`, `<db:Password>`, `<api-key>`) is redacted, the token after `IDENTIFIED BY`, heredoc bodies (`<<<EOT`, `<<<'EOT'`, `<<EOF`, `<<~EOS`), Ruby `%q(...)`/`%Q{...}`, a `#` comment without a space before it in Python and Ruby (`x=1#secret`), and an unquoted one-word value of a secret-like name in any file (`DB_PASSWORD := x`; calls, attributes, comparisons and None/True/False stay). 27 cases as tests, each with a letters-only secret. | `core/redactor.py` |
+| 3 | The 24 keys that existed only in English (AI fix, rule manager, cancel) are translated to German and Arabic. A test checks that the three files have the same keys and the same `{placeholders}`. | `translations/*.json` |
+| 4 | `google-generativeai` (archived) is replaced by `google-genai` (`genai.Client(api_key=...).models.generate_content(model=..., contents=...)`). Redaction, consent and the rule that secret findings are never sent are unchanged; a 404 from the new SDK still names the retired model. | `scanner_engine/ai_analyzer.py`, `src/requirements.txt`, `src/oranovix_guardian.spec` |
+
+Tests: 1993 passing, 6 skipped (52 new). Type check: `uvx pyright`, 0 errors.
+
+Known limits:
+
+- The new SDK call is tested against a fake `google.genai` module; no test reaches Google. It needs one manual check with a real key.
+- In shell scripts and Dockerfiles every unquoted value after `=` is replaced, also harmless ones (`APP_ENV=production`): the AI sees less of such files.
+- In credential files the whole rest of a line after the first separator is replaced, so the AI does not see host or user names there either.
+- A secret in a heredoc is found by the heredoc rule only when the closing tag stands on its own line.
+
 ## Log Sentinel (branch `feature/log-sentinel`)
 
 Goal: read the web server's access logs on this computer, report attacks, and link them with the file integrity monitor. Detection only: nothing is blocked and nothing from the logs is sent anywhere.
