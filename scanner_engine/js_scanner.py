@@ -174,8 +174,37 @@ class JSScanner(BaseScanner):
         Returns:
             A list of ``_Rule`` tuples ready for use in ``_scan_file``.
         """
+        # Request data in Express / Node.js handlers.
+        req = r"\breq(?:uest)?\s*\.\s*(?:query|body|params|cookies|headers)\b"
         return [
             # --- CRITICAL -----------------------------------------------
+
+            # exec()/execSync() of child_process (often destructured) with
+            # request data, concatenation or a template string
+            (
+                r"(?:(?<![\w.$])|\bchild_process\s*\.\s*)(?:exec|execSync)\s*\("
+                r"(?:[^)]*\+|\s*`[^`]*\$\{|[^)]*" + req + r")",
+                "OS Command Built from Variable Input",
+                Severity.CRITICAL,
+                "command_injection",
+                "JS016",
+            ),
+            # MongoDB $where runs JavaScript on the server
+            (
+                r"\$where['\"]?\s*[:(]\s*[^,}]*?(?:\+|\$\{|" + req + r")",
+                "MongoDB $where Built from Variable Input (NoSQL Injection)",
+                Severity.CRITICAL,
+                "sql_injection",
+                "JS018",
+            ),
+            # JWT verification that accepts unsigned tokens
+            (
+                r"\balgorithms\s*:\s*\[[^\]]*['\"]none['\"]",
+                "JWT Verification Accepts the 'none' Algorithm",
+                Severity.CRITICAL,
+                "",
+                "JS019",
+            ),
 
             # eval() with a non-literal argument
             (
@@ -220,6 +249,15 @@ class JSScanner(BaseScanner):
             ),
 
             # --- HIGH ---------------------------------------------------
+
+            # Request data written into the response unescaped (reflected XSS)
+            (
+                r"\bres\s*\.\s*(?:send|write|end)\s*\([^;]*" + req,
+                "Request Data Sent in the Response – Reflected XSS",
+                Severity.HIGH,
+                "xss",
+                "JS017",
+            ),
 
             # innerHTML / outerHTML assignment with a variable (reflected XSS)
             (

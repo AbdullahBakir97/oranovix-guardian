@@ -175,6 +175,15 @@ class PHPScanner(BaseScanner):
         return [
             # --- CRITICAL -----------------------------------------------
 
+            # unserialize() of request data – PHP object injection
+            (
+                r"\bunserialize\s*\([^;]*\$_(?:GET|POST|COOKIE|REQUEST)\b",
+                "unserialize() of Request Data – Object Injection",
+                Severity.CRITICAL,
+                "insecure_deserialization",
+                "PHP013",
+            ),
+
             # eval() – arbitrary PHP code execution
             (
                 r"\beval\s*\(",
