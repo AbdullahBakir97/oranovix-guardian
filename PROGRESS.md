@@ -1,5 +1,160 @@
 # Oranovix Guardian — Development Progress
 
+## Fixes from the full audit (main @ f1d1b43)
+
+Every item was reproduced first by a failing test, then fixed. Baseline before the fixes: 1777 passing, 5 skipped, pyright 0 errors.
+
+### Phase 1: data location (branch `fix/data-location`)
+
+Problem: the installer puts the exe in Program Files, and the exe wrote every data file next to itself. For a normal user that folder is read-only, so the alarm center, the scan history, the feed and event stores and the OSV update failed with `sqlite3.OperationalError: unable to open database file`, and the AI consent was never saved.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | `AppPaths` is the only place that knows where data lives: `ORANOVIX_DATA_DIR` if set; the installed exe on Windows uses `%LOCALAPPDATA%\Oranovix Guardian` (then `%APPDATA%`, then the home folder); from source the project root as before. The folder is created on first use. Resources (assets, translations, `default_rules.json`, the sample log) come from the bundle (`sys._MEIPASS`). `DataFile` names every data file. | `core/app_paths.py` |
+| 2 | All stores take their path from `AppPaths`: settings, `scan_history.db` (also the alarm memory), `integrity.db`, `feed.db`, `security_events.db`, `log_sentinel_state.db`, `osv.db`, `rules/custom_rules.json`, `reports/output`. The six copies of the frozen/source path logic are gone. The rule engine now loads `default_rules.json` from the bundle; before, the exe looked for it next to itself and found nothing. | the stores, `scanner_engine/rule_engine.py`, `reports/pdf_generator.py`, `gui/pages/reports_page.py` |
+| 3 | `SettingsFile` owns `settings.json`: one lock per file for the whole process, read-modify-write under that lock, write to a temp file then `os.replace`. A file that does not parse (or is not an object) is renamed to `settings.json.corrupt-<timestamp>` instead of being overwritten with one section. ThemeManager, SoundManager, GeminiConfig, LiveDefenseSettings, ThreatFeedSettings and the Log Sentinel settings all use it. | `core/settings_file.py` |
+| 4 | `StorageProblems`: a failed write (settings, scan history, custom rules) is reported once per file. The window shows it in the status bar and a warning dialog that names the file, the reason and the data folder. Problems before the window exists are kept and shown when it does. | `core/storage_problems.py`, `gui/app.py` |
+| 5 | Migration: on start, data files that an older version wrote next to the exe are copied into the data folder, once (a marker file stops later copies). Existing files in the data folder are never overwritten; the old files are never deleted. | `core/app_paths.py`, `main.py` |
+| 6 | Single instance per data folder: a named mutex on Windows, an exclusive lock file elsewhere. A second start shows a message, brings the running window to the front and exits. | `core/single_instance.py`, `main.py` |
+| 7 | Installer: still `{autopf}`, no `settings.json` in `[Files]` (defaults come from the code), no `[UninstallDelete]` of runtime files in `{app}`. Version 1.1.0 everywhere (`core/version.py`, installer, status bar). | `build_tools/installer.iss`, `core/version.py`, `gui/status_bar.py` |
+| 8 | Tests: the exe is simulated with `sys.frozen` in a folder that is really read-only (chmod 555, plus an ACL deny entry on Windows, where chmod does not protect a folder); every store, the OSV update target, the consent, custom rules and the PDF output work and write into the data folder, and the install folder stays untouched. Migration, corrupt file, parallel writers, failed write reported once, second instance (in-process and as a second process), installer and version. The test session now sets `ORANOVIX_DATA_DIR` to a temp folder, so tests never write into the project root. | `tests/test_data_location.py`, `tests/conftest.py` |
+
+Tests: 1809 passing, 5 skipped (32 new). Type check: `uvx pyright`, 0 errors.
+
+Known limits:
+
+- The data folder is per Windows user. Two users on one machine each have their own settings, baselines and history.
+- Uninstalling keeps the data folder. It has to be deleted by hand to remove everything.
+- Migration copies only the known data files; old PDF reports in `{app}\reports\output` stay where they are.
+- The single-instance check is per data folder: a copy started with another `ORANOVIX_DATA_DIR` is allowed, because it does not share any database.
+- On Windows the second start finds the running window by its title; if it cannot be found, only the message is shown.
+
+### Phase 2: false positives (branch `fix/false-positives`)
+
+Problem: `DangerousFunctionRule` matched any method called `eval`, `exec` or `compile`, so `re.compile`, `model.eval()` and `df.eval` were CRITICAL (22 CRITICAL in a copy of requests and urllib3), and Live Defense rang a CRITICAL alarm with sound when a views.py gained `re.compile`. Placeholder secrets (`token = "test"`) were CRITICAL, B105 and B607 were promoted for form field names and literal command lists, md5 with `usedforsecurity=False` was flagged.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | Dangerous call rule: only the builtins `eval`, `exec`, `compile`, called by bare name or as `builtins.x` / `__builtins__.x`, and only if the module does not bind that name itself (import, assignment, def, parameter; `from builtins import eval` still counts). CRITICAL when the code argument is not a constant string, MEDIUM when it is. A `ModuleContext` gives rules facts about the whole module. | `scanner_engine/ast_analyzer.py` |
+| 2 | `SecretHeuristics`: placeholder values (test, changeme, xxx, example, dummy, empty, template variables like `${X}` or `{{ x }}`, values under 8 characters, URLs without a password, paths) and names ending in `_url`, `_field`, `_header`, `_name`, `_path`, `_label` (also `_uri`, `_file`) are not secrets. Used by SEC001, AST-SEC1, the secrets detector's password rule SEC-PWD01 and the Bandit promotion of B105/B106/B107. | `scanner_engine/secret_heuristics.py`, `scanner_engine/python_scanner.py`, `scanner_engine/secrets_detector.py` |
+| 3 | AST-CRY1 skips `hashlib.md5(..., usedforsecurity=False)`. | `scanner_engine/ast_analyzer.py` |
+| 4 | `BanditSeverityPolicy` looks at the flagged line before promoting: B105/B106/B107 only when confidence is not LOW and the name and value look like a secret; B603/B607 only when confidence is not LOW and the command is not a literal (string or list of strings); B102/B307 CRITICAL only when the code is not a constant string, MEDIUM otherwise. Unpromoted findings keep Bandit's own severity. | `scanner_engine/python_scanner.py` |
+| 5 | Live Defense: `ChangeClassifier.cap_findings` holds code-scan findings at MEDIUM for a modified file and at HIGH for a new one, except secrets and code or command execution (which the scanner rates CRITICAL only for non-constant input). Web shells still come in as signature hits and stay CRITICAL. The capped findings are also what the alarm center receives, so a capped finding cannot ring on its own. | `live_defense/classifier.py`, `live_defense/file_integrity.py` |
+
+Tests: 1886 passing, 5 skipped (77 new). Type check: `uvx pyright`, 0 errors. The findings on `tests/corpus` are identical before and after (same files, lines, categories and severities). A copy of the installed requests and urllib3 now has 0 CRITICAL findings (was 22).
+
+Known limits:
+
+- "Not rebound" is checked for the whole module: if a module defines its own `eval` anywhere, a call to the builtin `eval` elsewhere in that module is not reported.
+- `exec` of a constant string is MEDIUM. Code that builds the string first and passes a variable is CRITICAL even when the variable only ever holds a constant.
+- The placeholder list is a heuristic. A real password shorter than 8 characters is no longer promoted; Bandit still lists it with its own (LOW) severity.
+- Command execution keeps its scanner severity in a changed file, not only code execution: an existing test requires a CRITICAL command-execution finding in a modified file to stay CRITICAL.
+
+### Phase 3: scanner robustness (branch `fix/scanner-robustness`)
+
+Problem: a Python file with a 100,000-term expression raised RecursionError in the AST analyzer; the Python engine only caught OSError, so it aborted and every file sorted after it lost its Django, settings and AST findings (DJ005, DS001, SEC001 disappeared after adding `aaa_data.py`). Symlinks out of the project were read, imported regexes were never checked, and `migrations` was never scanned.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | `BaseScanner.isolated` runs one file (or one analyzer on one file) and turns any exception, including RecursionError and MemoryError, into the warning `<file>: not analysed (<what>: <reason>)`; the scan goes on. The Python engine isolates its regex checks, AST rules, Django rules and Django settings rules separately per file. `scan_each` does the same for the JS, PHP, Java, C#, template and secrets scanners; the orchestrator does it for the rule engine. | `scanner_engine/base.py`, `scanner_engine/python_scanner.py`, the scanners, `scanner_engine/orchestrator.py` |
+| 2 | Files above 5 MB (`BaseScanner.MAX_FILE_BYTES`) are not read; they appear once in the warnings ("larger than 5 MB"). The orchestrator drops duplicate warnings. Bandit gets the same capped list. | `scanner_engine/base.py`, `scanner_engine/orchestrator.py` |
+| 3 | `collect_files` (and the manifest walker) follow a symlink or junction only when its real path is inside the scan root. | `scanner_engine/base.py`, `scanner_engine/deps/manifests.py` |
+| 4 | Custom rules: each pattern is compiled once per process (`lru_cache`). Invalid regexes, and repeated groups that contain a repeat or alternatives (`(a+)+`, `(\w*)*`, `(a|aa)*`), are refused with a message: on import (shown in a dialog), on "add rule" (shown in the dialog), and on every load, so a file saved by an older version cannot hang a scan either (listed in the scan warnings). Rules run line by line on the first 1000 characters of each line. | `scanner_engine/rule_engine.py`, `gui/pages/settings_page.py` |
+| 5 | Folders: `venv`, `.venv`, `node_modules`, `.git`, `site-packages`, `__pycache__`, `dist` are still skipped. `migrations` is scanned. `env` and `build` are skipped only when they hold a virtual environment (`pyvenv.cfg`) or build output (setuptools `bdist.*`/`lib.*`/`temp.*`, PyInstaller `.toc` files, CMake). A folder with `pyvenv.cfg` is skipped under any name. | `scanner_engine/base.py` |
+
+Tests: 1925 passing, 6 skipped (39 new; the new file-symlink test skips because this account may not create symlinks, the junction tests run). Type check: `uvx pyright`, 0 errors. Findings on `tests/corpus` unchanged.
+
+Known limits:
+
+- The pattern check is a heuristic. It refuses some harmless patterns (`(?:foo|bar)+`; a character class or a non-repeated group works instead), and polynomial patterns such as `\w*\w*\w*x` pass it; the 1000-character line cap keeps those bounded but not instant.
+- Rules see only the first 1000 characters of a line: a match further right in minified code is missed.
+- A file the antivirus locks is read as empty by the line scanners (unchanged behaviour); only the Python engine reports it as unreadable.
+- Generated `build` folders are recognised by setuptools, PyInstaller and CMake markers only; other build output is scanned.
+
+### Phase 4: PDF report (branch `fix/pdf-report`)
+
+Problem: titles, descriptions, recommendations, file names, rule ids, confidence and CWE went into ReportLab paragraphs unescaped, so one `<` (common in OSV summaries: "XSS via <svg>", "versions < 2.0") stopped the whole report with `ValueError: paraparser: syntax error`. The snippet was escaped and then cut, which could split `&lt;`. And the report printed full secrets: AWS keys, Django `SECRET_KEY`, Bandit's "Possible hardcoded password: 'value'".
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | Every dynamic value is escaped (`_text`): company name, top-rules list, file table, title, severity, rule ids, confidence, file and line, CWE, description, snippet, recommendation. The snippet is masked, cut to 300 characters, and only then escaped. | `reports/pdf_generator.py` |
+| 2 | `SecretMasker`: for findings in the SECRET category or with B105/B106/B107, values in the title, description, snippet and recommendation are shown as first 4 + `…` + last 4 (`AKIA…MPLE`); values under 12 characters as `****`. It recognises quoted values, unquoted values of secret-like names, the password in `scheme://user:password@host`, and token shapes (AWS, GitHub, OpenAI-style, Slack, JWT). Names stay readable. | `reports/secret_masking.py` |
+| 3 | Setting "Show secret values in reports" (`report_show_secret_values`, off by default) in Settings → Reports; `PDFReportConfig.show_secret_values` overrides it. AR/DE/EN. | `gui/pages/settings_page.py`, translations |
+| 4 | Tests read the text of the generated PDF with `pypdf` (new test-only dependency in `src/requirements-dev.txt`): `<`, `&`, `>` in every field render as text; a report of `tests/corpus` and of a project with a Django `SECRET_KEY`, an AWS key and a Bandit password contains none of the full values. | `tests/test_pdf_report.py` |
+
+Tests: 1941 passing, 6 skipped (16 new). Type check: `uvx pyright`, 0 errors.
+
+Known limits:
+
+- Masking applies to secret findings only. A secret that appears in the snippet of another kind of finding (say, a connection string on the same line as an SQL query) is printed as it is.
+- The masker works on text patterns. A secret in an unusual form (no quotes, a name without a secret-like word, not a known token shape) can stay visible.
+- The PDF only: the results page in the app still shows the full snippet, as before.
+
+### Phase 5: AI privacy and UI (branch `fix/ai-and-ui`)
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | The AI fix suggestion was turned into widgets in the worker thread. `on_ui_thread(widget, fn)` hands the result to the Tk thread with `after(0, ...)` and drops it quietly when the window is gone; the results page uses it. | `gui/ui_thread.py`, `gui/pages/results_page.py` |
+| 2 | Redactor gaps. Shell scripts (`.sh`, `.bash`, `.zsh`, `.ps1`, including `$env:X=` and `$X =`) and Dockerfiles (`ENV`/`ARG`, with `=` or a space) are treated as settings files. `.pgpass`, `.htpasswd`, `.npmrc`, `.netrc`, `.git-credentials`, `.pypirc`: everything after the first `=`, `:` or space is data. The text of XML/HTML elements whose name holds a secret word (`<password>`, `<db:Password>`, `<api-key>`) is redacted, the token after `IDENTIFIED BY`, heredoc bodies (`<<<EOT`, `<<<'EOT'`, `<<EOF`, `<<~EOS`), Ruby `%q(...)`/`%Q{...}`, a `#` comment without a space before it in Python and Ruby (`x=1#secret`), and an unquoted one-word value of a secret-like name in any file (`DB_PASSWORD := x`; calls, attributes, comparisons and None/True/False stay). 27 cases as tests, each with a letters-only secret. | `core/redactor.py` |
+| 3 | The 24 keys that existed only in English (AI fix, rule manager, cancel) are translated to German and Arabic. A test checks that the three files have the same keys and the same `{placeholders}`. | `translations/*.json` |
+| 4 | `google-generativeai` (archived) is replaced by `google-genai` (`genai.Client(api_key=...).models.generate_content(model=..., contents=...)`). Redaction, consent and the rule that secret findings are never sent are unchanged; a 404 from the new SDK still names the retired model. | `scanner_engine/ai_analyzer.py`, `src/requirements.txt`, `src/oranovix_guardian.spec` |
+
+Tests: 1993 passing, 6 skipped (52 new). Type check: `uvx pyright`, 0 errors.
+
+Known limits:
+
+- The new SDK call is tested against a fake `google.genai` module; no test reaches Google. It needs one manual check with a real key.
+- In shell scripts and Dockerfiles every unquoted value after `=` is replaced, also harmless ones (`APP_ENV=production`): the AI sees less of such files.
+- In credential files the whole rest of a line after the first separator is replaced, so the AI does not see host or user names there either.
+- A secret in a heredoc is found by the heredoc rule only when the closing tag stands on its own line.
+
+### Phase 6: detection gaps (branch `feature/detection-gaps`)
+
+The audit's 32-case corpus found every Python/Django case but missed these.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | JS016 (CRITICAL): `exec`/`execSync` called by bare name (destructured from `child_process`) or as `child_process.exec`, with concatenation, a template string or request data: `exec('ls ' + req.query.dir)`. A method `x.exec()` (RegExp, query builders) is not matched. | `scanner_engine/js_scanner.py` |
+| 2 | JS017 (HIGH): `res.send`/`res.write`/`res.end` with request data (`req.query`, `req.body`, `req.params`, cookies, headers): reflected XSS. `res.json(req.body)` stays quiet. | `scanner_engine/js_scanner.py` |
+| 3 | JS018 (CRITICAL): MongoDB `$where` (object key or `.$where(...)`) built with concatenation, a template string or request data. A constant `$where` stays quiet. | `scanner_engine/js_scanner.py` |
+| 4 | JS019 (CRITICAL): `algorithms: [... 'none' ...]`, a JWT check that accepts unsigned tokens. | `scanner_engine/js_scanner.py` |
+| 5 | PHP013 (CRITICAL): `unserialize()` of `$_COOKIE`, `$_GET`, `$_POST` or `$_REQUEST` (also inside `base64_decode`). | `scanner_engine/php_scanner.py`, `scanner_engine/categories.py` |
+| 6 | Log Sentinel: Shellshock (`() { :; };` and the `>_[...]` variant) in the User-Agent, the Referer or the request is a command injection (LS105). Struts/OGNL `${#...}`, `%{...}`, `#_memberAccess`, `@ognl.OgnlContext` in path or query are template/expression injection (LS107). Both kept in the existing rules, so no new texts were needed. | `log_sentinel/rules.py` |
+
+Tests: 42 new (attacks and harmless neighbours: `pattern.exec`, `res.json(req.body)`, a constant `$where`, `algorithms: ['HS256']`, `json_decode($_COOKIE[...])`, CSS braces and printf formats in URLs). The existing false-positive corpora (Django admin URLs, "O'Brien", slugs, the benign day log) stay at zero. Type check: `uvx pyright`, 0 errors.
+
+Known limits:
+
+- The JS and PHP rules work line by line: a request value assigned to a variable first (`const dir = req.query.dir; exec('ls ' + dir)`) is found by JS016 only through the concatenation, and `res.send(html)` with `html` built on an earlier line is missed.
+- `%{...}` in a URL is reported as an expression even when an application uses it for its own templates.
+- Shellshock payloads are not added to `tests/fixtures/log_sentinel/true_positives.txt`: the antivirus quarantined that file when they were written into it. The tests build them at runtime instead.
+
+### Phase 7: release check (branch `chore/release-check`)
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | `build_tools/build.ps1` builds the one-file exe with `--collect-all bandit --collect-all stevedore --copy-metadata bandit --hidden-import keyring.backends.Windows --hidden-import truststore --collect-data certifi`, plus `--collect-data customtkinter`, `--collect-submodules arabic_reshaper`, and the bundled assets, translations and `rules/default_rules.json`; then Inno Setup 6. | `build_tools/build.ps1` |
+| 2 | Installer: `SourceDir=..` (paths were resolved from `build_tools\`, where `dist\` and `assets\` do not exist), `x64compatible` instead of the deprecated `x64`. Builds `dist\Oranovix_Guardian_Setup_v1.1.0.exe`. | `build_tools/installer.iss` |
+| 3 | README: "Scans offline, optional online AI" instead of "100% offline"; build instructions point to `build.ps1`; new section "Where your data is". | `README.md` |
+
+Checked on the build machine (non-elevated session, exe copied into a folder with a write-deny ACL, `LOCALAPPDATA` pointed to a test folder): the exe starts and keeps running; `scan_history.db`, `feed.db`, `security_events.db`, `reports\output` and `rules\` are created in `<LOCALAPPDATA>\Oranovix Guardian`; nothing is written next to the exe. A second start shows "Oranovix Guardian is already running" (a message box) and no second window.
+
+To check by hand after installing the setup to Program Files and logging in as a standard (non-admin) user:
+
+1. Switch to the light theme, close the app, start it again: still light (`%LOCALAPPDATA%\Oranovix Guardian\settings.json` has `"theme": "light"`).
+2. Scan any folder; the dashboard shows it under recent scans after a restart.
+3. Scan `tests\corpus` (or any file with a hardcoded password): the CRITICAL alarm plays its sound, the red toast appears, the taskbar button flashes.
+4. Open Threat Feed (answer the first-run question) and Log Sentinel ("Analyse a sample log"): no error.
+5. Export the PDF report: the file is in `%LOCALAPPDATA%\Oranovix Guardian\reports\output`, and a password from the scan is shown as `****` or `AKIA…MPLE`.
+6. Nothing new appears in `C:\Program Files\Oranovix Guardian`.
+7. Start the app a second time: the message appears and the open window comes to the front.
+8. With a Gemini key and online AI allowed: "AI Fix" and the AI analysis work through `google-genai`.
+
+Known limits:
+
+- The installer itself was built but not run: installing to Program Files needs an elevated prompt, and the standard-user checks need a second account. The list above covers them.
+- The exe is not code-signed; SmartScreen will warn on first start.
+
 ## Log Sentinel (branch `feature/log-sentinel`)
 
 Goal: read the web server's access logs on this computer, report attacks, and link them with the file integrity monitor. Detection only: nothing is blocked and nothing from the logs is sent anywhere.

@@ -34,13 +34,38 @@ _HASH_COMMENT_ONLY = frozenset({
 })
 
 # Files that hold settings, not code: there every unquoted value is data.
+# Shell scripts and Dockerfiles count too: ``export DB_PASSWORD=x`` and
+# ``ENV POSTGRES_PASSWORD=x`` set values the same way.
 _CONFIG_FILES = frozenset({
     ".env", ".ini", ".cfg", ".conf", ".properties", ".yaml", ".yml", ".toml",
+    ".sh", ".bash", ".zsh", ".ps1", ".dockerfile",
 })
+_CONFIG_NAMES = frozenset({"dockerfile", "containerfile"})
+# Credential files: every value after the first =, : or space is data.
+_CREDENTIAL_FILES = frozenset({".pgpass", ".htpasswd", ".npmrc", ".netrc", "_netrc", ".git-credentials", ".pypirc"})
 _CONFIG_LINE = re.compile(
-    r"^(?P<head>[ \t]*(?:export[ \t]+|-[ \t]+)?[\w.\-]+[ \t]*[=:][ \t]*)(?P<value>[^\r\n]*)$",
-    re.MULTILINE,
+    r"^(?P<head>[ \t]*(?:export[ \t]+|-[ \t]+|(?:ENV|ARG)[ \t]+|\$(?:env:)?)?[\w.\-]+[ \t]*[=:][ \t]*)"
+    r"(?P<value>[^\r\n]*)$",
+    re.MULTILINE | re.IGNORECASE,
 )
+# Dockerfile ``ENV NAME value`` (no =).
+_DOCKER_ENV_SPACE = re.compile(r"^(?P<head>[ \t]*(?:ENV|ARG)[ \t]+[\w.\-]+[ \t]+)(?P<value>[^=\s][^\r\n]*)$",
+                               re.MULTILINE | re.IGNORECASE)
+_CREDENTIAL_LINE = re.compile(r"^(?P<head>[ \t]*[^\s=:#;]+(?:[ \t]*[=:][ \t]*|[ \t]+))(?P<value>[^\r\n]+)$",
+                              re.MULTILINE)
+# PHP and shell heredocs (<<<EOT, <<<'EOT', <<EOF, <<-EOF, <<~EOS): the body is data.
+_HEREDOC = re.compile(
+    r"(?P<open><<<?[-~]?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_]\w*)(?P=q)[^\n]*\n)"
+    r"(?P<body>.*?)(?P<close>\n[ \t]*(?P=tag)\b)",
+    re.DOTALL,
+)
+# Ruby %q(...), %Q{...}, %(...): a string with its own delimiters.
+_RUBY_PERCENT = re.compile(r"%[qQ]?(?P<open>[(\[{<|!/])")
+_RUBY_CLOSE = {"(": ")", "[": "]", "{": "}", "<": ">"}
+_RUBY_FILES = frozenset({".rb", ".rake", ".gemspec", ".ru"})
+_RUBY_NAMES = frozenset({"gemfile", "rakefile", "guardfile"})
+# Languages where # outside a string always starts a comment, even in x=1#c.
+_HASH_ANYWHERE = frozenset({".py", ".pyw", ".rb"})
 _CONFIG_KEEP = frozenset({"true", "false", "yes", "no", "on", "off", "null", "none", "~"})
 _NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?")
 
@@ -53,6 +78,24 @@ _TOKEN = re.compile(r"(?<![A-Za-z0-9_\-+/])[A-Za-z0-9_\-+/]{16,}")
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
+# <password>x</password>, <db:Password type="plain">x</db:Password>, <api-key>x</api-key>
+_SECRET_TAG_WORDS = r"(?:pass(?:word|wd)?|pwd|secret|token|api[-_]?key|access[-_]?key|private[-_]?key|credential|auth)"
+_SECRET_ELEMENT = re.compile(
+    # Attributes may already hold placeholders such as <STR_1>.
+    r"(?P<open><(?P<tag>[\w.:-]*" + _SECRET_TAG_WORDS + r"[\w.:-]*)"
+    r"(?:\s(?:[^<>]|<(?:STR|VALUE)_\d+>|<REDACTED>)*)?>)"
+    r"(?P<value>[^<]+)"
+    r"(?P<close></(?P=tag)\s*>)",
+    re.IGNORECASE,
+)
+# SQL: CREATE USER x IDENTIFIED BY secret / IDENTIFIED WITH plugin BY 'secret'
+_IDENTIFIED_BY = re.compile(
+    r"(?P<head>\bIDENTIFIED\s+(?:WITH\s+\S+\s+)?BY\s+(?:PASSWORD\s+)?)"
+    r"(?P<value>'[^'\n]*'|\"[^\"\n]*\"|`[^`\n]*`|[^\s;,)]+)",
+    re.IGNORECASE,
+)
+
+
 class _CodeRedaction:
     """One redaction run; remembers which value got which placeholder."""
 
@@ -61,15 +104,74 @@ class _CodeRedaction:
         self._values: Dict[str, str] = {}
         name = PureWindowsPath(file_name).name.lower()
         suffix = PureWindowsPath(file_name).suffix.lower()
-        self._is_config = name.startswith(".env") or suffix in _CONFIG_FILES
+        self._is_credentials = name in _CREDENTIAL_FILES
+        self._is_config = (
+            name.startswith(".env") or suffix in _CONFIG_FILES or name in _CONFIG_NAMES
+            or name.startswith("dockerfile") or self._is_credentials
+        )
+        self._is_docker = name in _CONFIG_NAMES or name.startswith("dockerfile") or suffix == ".dockerfile"
+        self._is_ruby = suffix in _RUBY_FILES or name in _RUBY_NAMES or not name
+        self._hash_anywhere = suffix in _HASH_ANYWHERE
         # Which comment styles the language has. Unknown files get both.
         self._hash_comments = self._is_config or suffix not in _SLASH_COMMENT_ONLY
         self._slash_comments = not self._is_config and suffix not in _HASH_COMMENT_ONLY
 
     def run(self, text: str) -> str:
-        if self._is_config:
+        text = _HEREDOC.sub(self._heredoc, text)
+        if self._is_ruby:
+            text = self._percent_literals(text)
+        if self._is_credentials:
+            text = _CREDENTIAL_LINE.sub(self._config_value, text)
+        elif self._is_config:
+            if self._is_docker:
+                text = _DOCKER_ENV_SPACE.sub(self._config_value, text)
             text = _CONFIG_LINE.sub(self._config_value, text)
         return self.code(text)
+
+    def _heredoc(self, match: "re.Match[str]") -> str:
+        if not match.group("body").strip():
+            return match.group(0)
+        return match.group("open") + REDACTED + match.group("close")
+
+    def _percent_literals(self, text: str) -> str:
+        """Ruby ``%q(...)``: the content between the delimiters is a string."""
+        out: List[str] = []
+        i = 0
+        for match in _RUBY_PERCENT.finditer(text):
+            if match.start() < i:
+                continue
+            before = text[match.start() - 1] if match.start() else " "
+            if before.isalnum() or before in "_)]}":     # x % (y): an operator
+                continue
+            opener = match.group("open")
+            closer = _RUBY_CLOSE.get(opener, opener)
+            end = self._delimited_end(text, match.end(), opener, closer)
+            if end < 0:
+                continue
+            out.append(text[i:match.end()])
+            out.append(self._literal(text[match.end():end]))
+            out.append(closer)
+            i = end + 1
+        out.append(text[i:])
+        return "".join(out)
+
+    @staticmethod
+    def _delimited_end(text: str, start: int, opener: str, closer: str) -> int:
+        depth = 1
+        p = start
+        while p < len(text) and text[p] != "\n":
+            c = text[p]
+            if c == "\\":
+                p += 2
+                continue
+            if c == closer:
+                depth -= 1
+                if depth == 0:
+                    return p
+            elif c == opener and closer != opener:
+                depth += 1
+            p += 1
+        return -1
 
     def _config_value(self, match: "re.Match[str]") -> str:
         """``KEY=value`` / ``key: value`` in a config file: the value is data.
@@ -120,7 +222,8 @@ class _CodeRedaction:
         """Index after the comment that starts at ``text[i]``, or -1 if none does."""
         c = text[i]
         before = text[i - 1] if i > 0 else "\n"
-        if c == "#" and self._hash_comments and before.isspace() and not text.startswith("#!", i):
+        if c == "#" and self._hash_comments and (before.isspace() or self._hash_anywhere) \
+                and not text.startswith("#!", i):
             return self._line_end(text, i)
         if c == "/" and self._slash_comments:
             if text.startswith("//", i) and before != ":":
@@ -367,8 +470,28 @@ class Redactor:
             rules.append((re.compile(source, re.MULTILINE), replace))
 
         rules.append((cls._assignment_pattern(SECRET_VARIABLE_NAMES), cls._replace_assigned))
+        rules.append((_SECRET_ELEMENT, cls._replace_element))
+        rules.append((_IDENTIFIED_BY, cls._replace_identified_by))
+        rules.append((cls._unquoted_pattern(SECRET_VARIABLE_NAMES), cls._replace_unquoted))
         return rules
 
+    @staticmethod
+    def _unquoted_pattern(names: frozenset) -> Pattern[str]:
+        """``DB_PASSWORD := value``: an unquoted value of a secret-like name.
+
+        The value is one plain word: a call (``get_password()``), an
+        attribute (``settings.KEY``), an index, a comparison and the words
+        None/True/False/null are not values and stay as they are.
+        """
+        alternatives = "|".join(sorted((re.escape(n) for n in names), key=len, reverse=True))
+        return re.compile(
+            r"(?P<head>(?<![\w-])[\w\-]*(?:" + alternatives + r")[\w\-]*"
+            r"[ \t]*(?::=|=|:)(?!=)[ \t]*)"
+            r"(?!(?:none|true|false|null|nil|undefined|self|this)\b)"
+            r"(?P<value>[^\s\"'`#;,()\[\]{}<>.=:]{4,})"
+            r"(?![\w.(\[:])",
+            re.IGNORECASE,
+        )
     @staticmethod
     def _assignment_pattern(names: frozenset) -> Pattern[str]:
         """A string literal assigned to (or compared with) a secret-like name.
@@ -418,6 +541,22 @@ class Redactor:
             lambda m: f"{m.group(1)}{REDACTED}{m.group(2)}",
             match.group(0),
         )
+
+    @staticmethod
+    def _replace_element(match: "re.Match[str]") -> str:
+        return f"{match.group('open')}{REDACTED}{match.group('close')}"
+
+    @staticmethod
+    def _replace_identified_by(match: "re.Match[str]") -> str:
+        value = match.group("value")
+        quote = value[0] if value[:1] in "'\"`" else ""
+        return f"{match.group('head')}{quote}{REDACTED}{quote}"
+
+    @staticmethod
+    def _replace_unquoted(match: "re.Match[str]") -> str:
+        if _PLACEHOLDER.fullmatch(match.group("value")):
+            return match.group(0)
+        return f"{match.group('head')}{REDACTED}"
 
     @staticmethod
     def _replace_assigned(match: "re.Match[str]") -> str:

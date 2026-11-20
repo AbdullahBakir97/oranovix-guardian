@@ -7,6 +7,7 @@ import customtkinter as ctk
 
 from gui.theme_manager    import ThemeManager
 from core.language_manager import LanguageManager
+from core.version import APP_VERSION
 
 
 class StatusBar(ctk.CTkFrame):
@@ -81,7 +82,7 @@ class StatusBar(ctk.CTkFrame):
 
         ctk.CTkLabel(
             self,
-            text="Oranovix Guardian v1.0",
+            text=f"Oranovix Guardian v{APP_VERSION}",
             font=ctk.CTkFont(size=10),
             text_color=tm.c("text3"),
             fg_color="transparent",

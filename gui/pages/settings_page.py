@@ -38,7 +38,9 @@ from core.secret_store        import SecretStore, SecretStoreError
 from core.sound_manager       import SoundManager
 from scanner_engine.deps.osv_db import OSVDatabase, OSVUpdateError
 from scanner_engine.gemini_config import GEMINI_API_KEY_ENV, GeminiConfig
-from scanner_engine.rule_engine import RuleEngine, Rule, RuleLanguage
+from scanner_engine.rule_engine import RuleEngine, Rule, RuleLanguage, RulePatternError
+from core.settings_file import SettingsFile
+from reports.pdf_generator import SHOW_SECRETS_SETTING
 
 if TYPE_CHECKING:
     from threat_intel.hub import ThreatIntelHub
@@ -379,6 +381,31 @@ class SettingsPage(ctk.CTkFrame):
         ).pack(anchor="w", pady=(6, 0))
         self._refresh_deps_status()
 
+        # ── Reports ───────────────────────────────────────────────────
+        rep_sec = _Section(scroll, f"\U0001f4c4  {lm.t('report_settings_title')}")
+        rep_sec.pack(fill="x", pady=(0, 12))
+        rep_row = ctk.CTkFrame(rep_sec, fg_color="transparent")
+        rep_row.pack(fill="x", padx=16, pady=(10, 2))
+        ctk.CTkLabel(
+            rep_row, text=lm.t("report_show_secrets"),
+            font=ctk.CTkFont(size=12), text_color=tm.c("text"), fg_color="transparent",
+        ).pack(side="left")
+        self._secrets_switch = ctk.CTkSwitch(
+            rep_row, text="", onvalue=True, offvalue=False,
+            fg_color=tm.c("border"), progress_color=tm.c("accent"),
+            command=self._toggle_report_secrets,
+        )
+        self._secrets_switch.pack(side="right")
+        if SettingsFile().get(SHOW_SECRETS_SETTING, False) is True:
+            self._secrets_switch.select()
+        else:
+            self._secrets_switch.deselect()
+        ctk.CTkLabel(
+            rep_sec, text=lm.t("report_show_secrets_hint"),
+            font=ctk.CTkFont(size=10), text_color=tm.c("text2"), fg_color="transparent",
+            wraplength=560, justify="left",
+        ).pack(anchor="w", padx=16, pady=(0, 10))
+
         # ── Threat Feed ───────────────────────────────────────────────
         if self._threat_hub is not None:
             feed_sec = _Section(scroll, f"\U0001f4e1  {lm.t('tf_settings_title')}")
@@ -422,6 +449,10 @@ class SettingsPage(ctk.CTkFrame):
         Python boolean before assignment.
         """
         self._sm.enabled = bool(self._snd_switch.get())
+
+    def _toggle_report_secrets(self) -> None:
+        """Off by default: a report is meant to be shared."""
+        SettingsFile().set(SHOW_SECRETS_SETTING, bool(self._secrets_switch.get()))
 
     def _on_volume_change(self, value: float) -> None:
         """Update SoundManager volume and refresh the percentage label.
@@ -839,8 +870,15 @@ class SettingsPage(ctk.CTkFrame):
         )
         if not path:
             return
-        count = self._engine.import_rules(path)
+        self._engine.import_rules(path)
         self._refresh_rules_list()
+        if self._engine.last_rejected:
+            from tkinter import messagebox
+            messagebox.showwarning(
+                lm.t("import_rules"),
+                lm.t("rules_rejected", rules="\n".join(self._engine.last_rejected)),
+                parent=self,
+            )
 
     def _export_rules(self) -> None:
         lm = LanguageManager()
@@ -995,7 +1033,11 @@ class SettingsPage(ctk.CTkFrame):
                 fix_suggestion=e_fix.get().strip(),
                 is_builtin=False,
             )
-            self._engine.add_rule(rule)
+            try:
+                self._engine.add_rule(rule)
+            except RulePatternError as exc:
+                test_result_lbl.configure(text=f"⚠ {exc}", text_color=tm.c("error"))
+                return
             self._refresh_rules_list()
             dlg.destroy()
 

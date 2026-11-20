@@ -8,14 +8,14 @@ listeners about changes through ``dispatch``; it never touches Tk.
 from __future__ import annotations
 
 import os
-import sys
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from core.alarm_center import AlarmCenter
+from core.app_paths import AppPaths
 from live_defense.controller import LiveDefenseSettings
 from scanner_engine.base import Severity
 
@@ -141,8 +141,7 @@ Listener = Callable[[SentinelState], None]
 
 def sample_log_path() -> Path:
     """The demo log that ships with the app."""
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
-    return base / "assets" / "sample_access.log"
+    return AppPaths.resource("assets", "sample_access.log")
 
 
 class LogSentinelController:

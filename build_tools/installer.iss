@@ -1,15 +1,22 @@
-; Inno Setup Script — Oranovix Guardian v1.0.0
+; Inno Setup Script — Oranovix Guardian v1.1.0
 ; ────────────────────────────────────────────────────────────────────────────
 ; To compile:
 ;   1. Download Inno Setup (free) from: https://jrsoftware.org/isinfo.php
 ;   2. Open this file in Inno Setup Compiler
 ;   3. Press F9 (or Build → Compile)
-;   4. Result: dist\Oranovix_Guardian_Setup_v1.0.exe
+;   4. Result: dist\Oranovix_Guardian_Setup_v1.1.0.exe
+;
+; The app is installed to Program Files, which a normal user cannot write
+; to. Nothing is written into {app} at runtime: settings, databases,
+; custom rules and reports live in %LOCALAPPDATA%\Oranovix Guardian
+; (core/app_paths.py). Default settings come from the code.
 ; ────────────────────────────────────────────────────────────────────────────
 
 [Setup]
 AppName=Oranovix Guardian
-AppVersion=1.0.0
+; Paths below are relative to the project root, not to build_tools.
+SourceDir=..
+AppVersion=1.1.0
 AppPublisher=Oranovix
 AppPublisherURL=https://oranovix.com
 AppSupportURL=https://oranovix.com/support
@@ -18,7 +25,7 @@ DefaultDirName={autopf}\Oranovix Guardian
 DefaultGroupName=Oranovix Guardian
 AllowNoIcons=yes
 OutputDir=dist
-OutputBaseFilename=Oranovix_Guardian_Setup_v1.0
+OutputBaseFilename=Oranovix_Guardian_Setup_v1.1.0
 SetupIconFile=assets\icon.ico
 Compression=lzma
 SolidCompression=yes
@@ -26,7 +33,8 @@ WizardStyle=modern
 ; Require Windows 10 or later
 MinVersion=10.0
 ; 64-bit only
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -44,9 +52,6 @@ Source: "assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs
 ; Translations
 Source: "translations\*"; DestDir: "{app}\translations"; Flags: ignoreversion recursesubdirs
 
-; Default settings
-Source: "settings.json"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
-
 [Icons]
 ; Start Menu shortcut
 Name: "{group}\Oranovix Guardian";     Filename: "{app}\Oranovix Guardian.exe"; IconFilename: "{app}\assets\icon.ico"
@@ -58,7 +63,5 @@ Name: "{autodesktop}\Oranovix Guardian"; Filename: "{app}\Oranovix Guardian.exe"
 [Run]
 Filename: "{app}\Oranovix Guardian.exe"; Description: "{cm:LaunchProgram,Oranovix Guardian}"; Flags: nowait postinstall skipifsilent
 
-[UninstallDelete]
-; Remove settings generated at runtime
-Type: files; Name: "{app}\settings.json"
-Type: files; Name: "{app}\reports\output\*"
+; No [UninstallDelete]: the app writes nothing into {app}. The user's data
+; folder (%LOCALAPPDATA%\Oranovix Guardian) is kept on uninstall.

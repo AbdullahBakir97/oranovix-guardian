@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import sys
+from contextlib import closing
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, List
+
+from core.app_paths import AppPaths, DataFile
+from core.storage_problems import StorageProblems
 
 
 class ScanHistory:
@@ -39,14 +41,19 @@ class ScanHistory:
 
     @staticmethod
     def _resolve_db_path() -> str:
-        if getattr(sys, "frozen", False):
-            base = os.path.dirname(sys.executable)  # next to the exe
-        else:
-            base = str(Path(__file__).parent.parent)
-        return os.path.join(base, "scan_history.db")
+        return str(AppPaths.data_file(DataFile.SCAN_HISTORY))
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path)
 
     def _create_tables(self) -> None:
-        with sqlite3.connect(self._db_path) as conn:
+        try:
+            self._create_tables_or_raise()
+        except sqlite3.Error as exc:
+            StorageProblems.report("scan history", self._db_path, exc)
+
+    def _create_tables_or_raise(self) -> None:
+        with closing(self._connect()) as conn, conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS scans (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +69,6 @@ class ScanHistory:
                     duration_secs   REAL    DEFAULT 0.0
                 )
             """)
-            conn.commit()
 
     # ------------------------------------------------------------------
     # Public API
@@ -71,7 +77,8 @@ class ScanHistory:
     def save_scan(self, result) -> None:
         """Persist a ScanResult to the database."""
         try:
-            with sqlite3.connect(self._db_path) as conn:
+            self._create_tables_or_raise()
+            with closing(self._connect()) as conn, conn:
                 conn.execute("""
                     INSERT INTO scans
                       (scan_date, target_path, files_scanned, total_issues,
@@ -90,14 +97,13 @@ class ScanHistory:
                     result.risk_score,
                     result.duration_seconds,
                 ))
-                conn.commit()
-        except Exception:
-            pass
+        except sqlite3.Error as exc:
+            StorageProblems.report("scan history", self._db_path, exc)
 
     def get_stats(self) -> Dict:
         """Return aggregate stats across all historical scans."""
         try:
-            with sqlite3.connect(self._db_path) as conn:
+            with closing(self._connect()) as conn:
                 row = conn.execute("""
                     SELECT
                         COUNT(*)         AS total_scans,
@@ -133,7 +139,7 @@ class ScanHistory:
     def get_recent(self, limit: int = 5) -> List[Dict]:
         """Return the N most-recent scan records."""
         try:
-            with sqlite3.connect(self._db_path) as conn:
+            with closing(self._connect()) as conn:
                 rows = conn.execute("""
                     SELECT scan_date, target_path, files_scanned,
                            total_issues, risk_score

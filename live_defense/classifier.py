@@ -6,10 +6,12 @@ refuse files that already look planted when it is created.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import ClassVar, FrozenSet, List, Optional, Sequence, Tuple
 
 from scanner_engine.base import Issue, Severity
+from scanner_engine.categories import IssueCategory
 
 from .base import ChangeType
 from .paths import PUBLIC_DIRS, LinkInfo, public_part, upload_part
@@ -41,6 +43,14 @@ class ChangeClassifier:
         "nginx.conf", "httpd.conf", "apache2.conf",
     })
     SERIOUS: ClassVar[FrozenSet[Severity]] = frozenset({Severity.HIGH, Severity.CRITICAL})
+    # Code-scan findings that keep their own severity in a changed file:
+    # secrets, and code or command execution (the scanner rates those
+    # CRITICAL only for non-constant input). Web shells come in as
+    # signature hits, not findings. Everything else is capped, so an
+    # ordinary edit never rings the CRITICAL alarm.
+    UNCAPPED: ClassVar[FrozenSet[IssueCategory]] = frozenset({
+        IssueCategory.SECRET, IssueCategory.CODE_EXEC, IssueCategory.COMMAND_EXEC,
+    })
     LISTED_FINDINGS: ClassVar[int] = 3
     SERVER_CONF_DIRS: ClassVar[FrozenSet[str]] = frozenset({
         "nginx", "apache", "apache2", "httpd", "conf.d", "sites-available", "sites-enabled",
@@ -57,6 +67,7 @@ class ChangeClassifier:
         too_large: bool = False,
     ) -> Tuple[Severity, Tuple[str, ...]]:
         """*root_name* is the monitored folder's own name: monitoring ``uploads`` directly is still public."""
+        findings = self.cap_findings(change, findings)
         path = self.normalized(relative)
         suffix = path.suffix.lower()
         rated: List[Tuple[Severity, str]] = []
@@ -117,6 +128,25 @@ class ChangeClassifier:
 
         rated.sort(key=lambda item: -item[0].weight)
         return rated[0][0], tuple(reason for _, reason in rated)
+
+    @staticmethod
+    def finding_ceiling(change: ChangeType) -> Severity:
+        """Highest severity a capped finding may have: MEDIUM for a modified file, HIGH for a new one."""
+        return Severity.MEDIUM if change is ChangeType.MODIFIED else Severity.HIGH
+
+    def cap_findings(self, change: ChangeType, findings: Sequence[Issue]) -> List[Issue]:
+        """*findings* with every category outside ``UNCAPPED`` held at the ceiling.
+
+        Unchanged findings are returned as they are; capped ones are copies.
+        """
+        ceiling = self.finding_ceiling(change)
+        capped: List[Issue] = []
+        for finding in findings:
+            if finding.category in self.UNCAPPED or finding.severity.weight <= ceiling.weight:
+                capped.append(finding)
+            else:
+                capped.append(replace(finding, severity=ceiling))
+        return capped
 
     def present_risks(
         self,

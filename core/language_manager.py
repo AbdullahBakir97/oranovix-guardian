@@ -12,7 +12,6 @@ Design:
 from __future__ import annotations
 
 import json
-import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set
@@ -242,27 +241,9 @@ class LanguageManager:
 
     @staticmethod
     def _find_translations_dir() -> Path:
-        """
-        Walk up from this file to locate (or create) the translations/
-        directory at the project root.
-        """
-        try:
-            from gui.asset_helper import get_translations_path
-            return Path(get_translations_path())
-        except ImportError:
-            pass
-        if getattr(sys, "frozen", False):
-            return Path(sys._MEIPASS) / "translations"  # type: ignore[attr-defined]
-        candidates = [
-            Path(__file__).parent.parent / "translations",
-            Path.cwd() / "translations",
-        ]
-        for p in candidates:
-            if p.exists():
-                return p
-        fallback = Path(__file__).parent.parent / "translations"
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
+        """The shipped translations/ folder (read-only, from the bundle)."""
+        from core.app_paths import AppPaths
+        return AppPaths.resource("translations")
 
     def _notify(self) -> None:
         for cb in list(self._observers):

@@ -10,16 +10,15 @@ touches Tk.
 """
 from __future__ import annotations
 
-import json
 import os
-import sys
-import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from core.alarm_center import AlarmCenter
+from core.app_paths import AppPaths
+from core.settings_file import SettingsFile
 
 from .base import IntegrityEvent, Monitor, MonitorReport
 from .baseline import Baseline, BaselineError, BaselineResult, KeyStore
@@ -35,39 +34,18 @@ class LiveDefenseSettings:
     DEFAULT_INTERVAL = 30
 
     def __init__(self, path: Optional[str] = None) -> None:
-        self._path = Path(path) if path else self.default_path()
-        self._lock = threading.Lock()
+        self._file = SettingsFile(path)
 
     @staticmethod
     def default_path() -> Path:
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent / "settings.json"
-        return Path(__file__).resolve().parents[1] / "settings.json"
+        return AppPaths.settings_path()
 
     def load(self) -> Dict[str, object]:
-        entry = self._read().get(self.KEY)
-        return dict(entry) if isinstance(entry, dict) else {}
+        return self._file.section(self.KEY)
 
-    def save(self, **values: object) -> None:
-        with self._lock:
-            data = self._read()
-            entry = data.get(self.KEY)
-            entry = dict(entry) if isinstance(entry, dict) else {}
-            entry.update(values)
-            data[self.KEY] = entry
-            try:
-                temp = self._path.with_name(self._path.name + ".tmp")
-                temp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-                os.replace(temp, self._path)
-            except OSError:
-                pass
-
-    def _read(self) -> Dict[str, object]:
-        try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
-        return data if isinstance(data, dict) else {}
+    def save(self, **values: object) -> bool:
+        """Merge *values* into the entry; ``False`` (and reported) when not saved."""
+        return self._file.update_section(self.KEY, **values)
 
 
 @dataclass(frozen=True)

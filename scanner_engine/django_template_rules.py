@@ -102,8 +102,7 @@ class DjangoTemplateScanner(BaseScanner):
     def _do_scan(self, target: str, result: ScanResult) -> ScanResult:
         files = self.collect_files(target, self.SUPPORTED_EXTENSIONS)
         result.files_scanned = len(files)
-        for file_path in files:
-            result.issues.extend(self.scan_file(file_path))
+        self.scan_each(files, result, self.scan_file)
         return result
 
     def scan_file(self, file_path: str) -> List[Issue]:

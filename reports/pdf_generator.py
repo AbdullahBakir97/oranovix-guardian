@@ -27,7 +27,6 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
 from xml.sax.saxutils import escape
 
@@ -55,6 +54,9 @@ from reportlab.pdfbase.ttfonts import TTFont
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.language_manager import LanguageManager
+from core.app_paths import AppPaths
+from core.settings_file import SettingsFile
+from reports.secret_masking import SecretMasker
 from scanner_engine.base import Issue, ScanResult, Severity
 
 if TYPE_CHECKING:
@@ -326,11 +328,24 @@ class PDFReportConfig:
         company_name:    Branding string shown in the report title banner.
         confidentiality: Classification label printed on the cover page
                          (e.g. ``"CONFIDENTIAL"`` or ``"INTERNAL USE ONLY"``).
+        show_secret_values: Print secret values in full. ``None`` reads the
+                         setting "Show secret values in reports" (off by
+                         default): a report is meant to be shared.
     """
 
     output_dir:      str = "reports/output"
     company_name:    str = "Oranovix Guardian"
     confidentiality: str = "CONFIDENTIAL"
+    show_secret_values: Optional[bool] = None
+
+
+SHOW_SECRETS_SETTING = "report_show_secret_values"
+SNIPPET_LENGTH = 300
+
+
+def _text(value: object) -> str:
+    """Any dynamic value, made safe for ReportLab's paragraph markup."""
+    return escape(str(value if value is not None else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +377,18 @@ class PDFReportGenerator:
                     configuration when omitted.
         """
         self._config = config or PDFReportConfig()
+
+    @property
+    def show_secret_values(self) -> bool:
+        if self._config.show_secret_values is not None:
+            return self._config.show_secret_values
+        return SettingsFile().get(SHOW_SECRETS_SETTING, False) is True
+
+    def _shown(self, issue: Issue, text: str) -> str:
+        """*text* of *issue* as the report may print it: secrets masked."""
+        if text and not self.show_secret_values and SecretMasker.holds_secret(issue):
+            return SecretMasker.mask(text)
+        return text or ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -529,7 +556,7 @@ class PDFReportGenerator:
         # Title banner
         story.append(
             Table(
-                [[Paragraph(self._config.company_name, S["title"])]],
+                [[Paragraph(_text(self._config.company_name), S["title"])]],
                 colWidths=["100%"],
                 style=TableStyle([
                     ("BACKGROUND",    (0, 0), (-1, -1), _Palette.DARK_BG),
@@ -708,10 +735,9 @@ class PDFReportGenerator:
             top = Counter(i.rule_id for i in result.issues).most_common(5)
             for rule_id, cnt in top:
                 # Resolve the human-readable title from the first matching issue.
-                title = next(
-                    (i.title for i in result.issues if i.rule_id == rule_id),
-                    rule_id,  # fall back to the rule ID itself if no title is found
-                )
+                first = next((i for i in result.issues if i.rule_id == rule_id), None)
+                title = _text(self._shown(first, first.title) if first else rule_id)
+                rule_id = _text(rule_id)
                 # Use the singular form when exactly one occurrence is found.
                 occ = t("occurrences") if cnt > 1 else t("occurrence")
                 story.append(
@@ -731,7 +757,7 @@ class PDFReportGenerator:
                 by_file.items(), key=lambda x: -len(x[1])
             ):
                 file_data.append([
-                    Paragraph(os.path.basename(fp), S["small"]),
+                    Paragraph(_text(os.path.basename(fp)), S["small"]),
                     str(len(file_issues)),
                 ])
             story.append(
@@ -916,11 +942,12 @@ class PDFReportGenerator:
 
         for idx, issue in enumerate(sorted_issues, 1):
             sev_color = _severity_color(issue.severity)
+            title = _text(self._shown(issue, issue.title))
             block = [
                 Table(
                     [[
-                        Paragraph(f"#{idx}  {issue.title}", S["body_bold"]),
-                        Paragraph(issue.severity.value,     S["body_bold"]),
+                        Paragraph(f"#{idx}  {title}", S["body_bold"]),
+                        Paragraph(_text(issue.severity.value), S["body_bold"]),
                     ]],
                     colWidths=[None, 24 * mm],
                     style=TableStyle([
@@ -938,13 +965,13 @@ class PDFReportGenerator:
                 Table(
                     [
                         [Paragraph(t("pdf_rule_id"),   S["small"]),
-                         Paragraph(issue.rule_ids_label, S["body"]),
+                         Paragraph(_text(issue.rule_ids_label), S["body"]),
                          Paragraph(t("pdf_confidence"), S["small"]),
-                         Paragraph(issue.confidence,   S["body"])],
+                         Paragraph(_text(issue.confidence), S["body"])],
                         [Paragraph(t("pdf_file_label"), S["small"]),
-                         Paragraph(f"{issue.filename}:{issue.line_number}", S["body"]),
+                         Paragraph(_text(f"{issue.filename}:{issue.line_number}"), S["body"]),
                          Paragraph(t("pdf_cwe"),        S["small"]),
-                         Paragraph(issue.cwe or "—",   S["body"])],
+                         Paragraph(_text(issue.cwe or "—"), S["body"])],
                     ],
                     colWidths=[22 * mm, None, 25 * mm, 35 * mm],
                     style=TableStyle([
@@ -963,23 +990,18 @@ class PDFReportGenerator:
                 block += [
                     Spacer(1, 3),
                     Paragraph(t("pdf_description"), S["small"]),
-                    Paragraph(issue.description, S["body"]),
+                    Paragraph(_text(self._shown(issue, issue.description)), S["body"]),
                 ]
 
             if issue.code_snippet:
-                # HTML-escape the snippet so XML special characters do not break
-                # ReportLab's markup parser when embedded in a Paragraph.
-                safe = (
-                    issue.code_snippet
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-                )
+                # Mask, cut, then escape: cutting after escaping could split
+                # an entity such as &lt; and break ReportLab's markup parser.
+                safe = _text(self._shown(issue, issue.code_snippet)[:SNIPPET_LENGTH])
                 block += [
                     Spacer(1, 3),
                     Paragraph(t("pdf_code_snippet"), S["small"]),
                     Paragraph(
-                        f"<font name='Courier' size='8'>{safe[:300]}</font>",
+                        f"<font name='Courier' size='8'>{safe}</font>",
                         S["code"],
                     ),
                 ]
@@ -988,7 +1010,7 @@ class PDFReportGenerator:
                 block += [
                     Spacer(1, 3),
                     Paragraph(t("pdf_recommendation"), S["small"]),
-                    Paragraph(issue.recommendation, S["body"]),
+                    Paragraph(_text(self._shown(issue, issue.recommendation)), S["body"]),
                 ]
 
             block.append(Spacer(1, 10))
@@ -1035,13 +1057,8 @@ class PDFReportGenerator:
         out_dir = self._config.output_dir
         # Resolve relative paths against the project root (or executable directory).
         if not os.path.isabs(out_dir):
-            if getattr(sys, "frozen", False):
-                # PyInstaller sets sys.frozen; use the executable's directory.
-                base = os.path.dirname(sys.executable)
-            else:
-                # Normal execution: go up one level from the reports/ package.
-                base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            out_dir = os.path.join(base, out_dir)
+            # Relative to the data folder: the install folder is read-only.
+            out_dir = os.path.join(str(AppPaths.data_dir()), out_dir)
         os.makedirs(out_dir, exist_ok=True)
         return os.path.join(out_dir, f"oranovix_report_{name}_{ts}.pdf")
 

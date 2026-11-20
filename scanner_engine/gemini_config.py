@@ -14,15 +14,15 @@ Nothing is sent to the online AI unless the user allowed it
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
-import sys
 from pathlib import Path
 from typing import Optional
 
+from core.app_paths import AppPaths
 from core.secret_store import SecretStore, SecretStoreError
+from core.settings_file import SettingsFile
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +55,15 @@ class GeminiConfig:
 
     @staticmethod
     def settings_path() -> Path:
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent / "settings.json"
-        return Path(__file__).parent.parent / "settings.json"
+        return AppPaths.settings_path()
+
+    @classmethod
+    def _file(cls) -> SettingsFile:
+        return SettingsFile(cls.settings_path())
 
     @classmethod
     def _read(cls) -> dict:
-        try:
-            data = json.loads(cls.settings_path().read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
+        return cls._file().read()
 
     @classmethod
     def model_name(cls) -> str:
@@ -102,13 +100,9 @@ class GeminiConfig:
         return cls.online_consent() is True
 
     @classmethod
-    def set_online_consent(cls, allowed: bool) -> None:
-        data = cls._read()
-        data[AI_ONLINE_CONSENT_SETTING] = CONSENT_ALLOW if allowed else CONSENT_OFFLINE
-        try:
-            cls._write(data)
-        except OSError as exc:
-            logger.warning("settings.json could not be rewritten: %s", exc)
+    def set_online_consent(cls, allowed: bool) -> bool:
+        """Store the choice; ``False`` (and reported to the user) when it could not be saved."""
+        return cls._file().set(AI_ONLINE_CONSENT_SETTING, CONSENT_ALLOW if allowed else CONSENT_OFFLINE)
 
     @staticmethod
     def safe_error_text(exc: BaseException, api_key: str = "") -> str:
@@ -154,16 +148,6 @@ class GeminiConfig:
                 )
                 return False
 
-        del data[LEGACY_API_KEY_SETTING]
-        try:
-            cls._write(data)
-        except OSError as exc:
-            logger.warning("settings.json could not be rewritten: %s", exc)
+        if not cls._file().remove(LEGACY_API_KEY_SETTING):
+            logger.warning("settings.json could not be rewritten")
         return moved
-
-    @classmethod
-    def _write(cls, data: dict) -> None:
-        path = cls.settings_path()
-        temp = path.with_name(path.name + ".tmp")
-        temp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.replace(temp, path)

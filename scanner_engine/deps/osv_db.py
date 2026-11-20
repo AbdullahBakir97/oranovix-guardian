@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import sys
 import tempfile
 import urllib.request
 import zipfile
@@ -19,6 +18,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
+
+from core.app_paths import AppPaths, DataFile
 
 from ..base import Severity
 from .severity import OSVSeverity
@@ -99,9 +100,7 @@ class OSVDatabase:
 
     @staticmethod
     def default_path() -> Path:
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent / "osv.db"
-        return Path(__file__).resolve().parents[2] / "osv.db"
+        return AppPaths.data_file(DataFile.OSV)
 
     @property
     def path(self) -> Path:

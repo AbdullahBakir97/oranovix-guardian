@@ -95,8 +95,7 @@ class PHPScanner(BaseScanner):
         """
         files = self.collect_files(target, self.SUPPORTED_EXTENSIONS)
         result.files_scanned = len(files)
-        for fpath in files:
-            result.issues.extend(self._scan_file(fpath))
+        self.scan_each(files, result, self._scan_file)
         return result
 
     # ------------------------------------------------------------------
@@ -175,6 +174,15 @@ class PHPScanner(BaseScanner):
         """
         return [
             # --- CRITICAL -----------------------------------------------
+
+            # unserialize() of request data – PHP object injection
+            (
+                r"\bunserialize\s*\([^;]*\$_(?:GET|POST|COOKIE|REQUEST)\b",
+                "unserialize() of Request Data – Object Injection",
+                Severity.CRITICAL,
+                "insecure_deserialization",
+                "PHP013",
+            ),
 
             # eval() – arbitrary PHP code execution
             (

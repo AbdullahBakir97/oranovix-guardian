@@ -4,11 +4,9 @@ Every UI color goes through TM.c('key').  Observers are notified on toggle.
 """
 from __future__ import annotations
 
-import json
-import os
-import sys
-from pathlib import Path
 from typing import Callable, Dict, List, Optional
+
+from core.settings_file import SettingsFile
 
 
 class ThemeManager:
@@ -178,35 +176,13 @@ class ThemeManager:
 
     # ── Persistence ────────────────────────────────────────────────────────
 
-    def _settings_path(self) -> str:
-        if getattr(sys, "frozen", False):
-            return os.path.join(os.path.dirname(sys.executable), "settings.json")
-        return str(Path(__file__).parent.parent / "settings.json")
-
     def _save_settings(self) -> None:
-        try:
-            path = self._settings_path()
-            data: dict = {}
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            data["theme"] = self._mode
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception:
-            pass
+        SettingsFile().set("theme", self._mode)
 
     def _load_settings(self) -> None:
-        try:
-            path = self._settings_path()
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                m = data.get("theme", "dark")
-                if m in ("dark", "light"):
-                    self._mode = m
-        except Exception:
-            pass
+        mode = SettingsFile().get("theme", "dark")
+        if mode in ("dark", "light"):
+            self._mode = mode
 
     def _notify(self) -> None:
         import customtkinter as ctk

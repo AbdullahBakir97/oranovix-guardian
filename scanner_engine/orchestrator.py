@@ -145,14 +145,19 @@ class ScanOrchestrator:
         except Exception as exc:
             self._warn(result, f"Rule Engine could not load: {exc}", ScanStage.RULES, 0.85)
             return
+        for message in engine.last_rejected:
+            self._warn(result, f"Custom rule skipped: {message}", ScanStage.RULES, 0.85)
         active = [rule for rule in engine.rules if rule.enabled]
         if not active:
             return
         self._report(ScanStage.RULES, f"Rule Engine: applying {len(active)} rule(s)...", 0.85)
         extensions = ScannerFactory.all_supported_extensions()
-        for file_path in BaseScanner.collect_files(target, extensions):
+        files = BaseScanner.within_size_limit(BaseScanner.collect_files(target, extensions), result)
+        for file_path in files:
             language = Language.from_extension(Path(file_path).suffix)
-            result.issues.extend(engine.scan_file(file_path, language))
+            result.issues.extend(BaseScanner.isolated(
+                result, file_path, lambda p=file_path, lang=language: engine.scan_file(p, lang), "rule engine"
+            ))
 
     def _run_dependency_scanner(self, target: str, result: ScanResult) -> None:
         scanner = self._dependency_scanner
@@ -191,6 +196,8 @@ class ScanOrchestrator:
     def _warn(
         self, result: ScanResult, warning: str, stage: ScanStage, fraction: float
     ) -> None:
+        if warning in result.engine_warnings:
+            return              # e.g. a file above the size cap, seen by several engines
         result.engine_warnings.append(warning)
         self._report(stage, warning, fraction, "error")
 

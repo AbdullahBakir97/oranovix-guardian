@@ -267,8 +267,15 @@ class CommandInjectionRule(AttackRule):
         _p(r"(?:^|[;|&]) ?(?:/bin/|/usr/bin/)(?:sh|bash|nc|cat|id|wget|curl)\b"),
     )
 
+    # Shellshock (CVE-2014-6271): a bash function definition in a header that a
+    # CGI script turns into an environment variable, followed by a command.
+    _SHELLSHOCK = re.compile(r"\( ?\) ?\{[^}]{0,60}\} ?[;>]")
+
     def find(self, request: NormalizedRequest, entry: AccessLogEntry) -> str:
-        return self.first(self._ON_VALUES, *request.values, request.path)
+        evidence = self.first(self._ON_VALUES, *request.values, request.path)
+        if evidence:
+            return evidence
+        return self.first((self._SHELLSHOCK,), request.user_agent, entry.referer.casefold(), request.decoded)
 
 
 class SsrfProbeRule(AttackRule):
@@ -313,6 +320,10 @@ class TemplateInjectionRule(AttackRule):
         _p(r"\{% ?(?:import|include|set|for|if|debug)\b[^%]{0,120}%\}"),
         _p(r"__(?:class|mro|subclasses|globals|builtins)__"),
         _p(r"\$\{ ?(?:t\(|@java\.lang|new java\.|\"freemarker)"),
+        # Struts / OGNL: ${#...}, %{...}, and its well-known context objects
+        _p(r"[$%]\{ ?\(? ?#"),
+        _p(r"%\{[^{}]{1,300}\}"),
+        _p(r"#_memberaccess|@ognl\.ognlcontext|#context ?\[ ?'xwork\."),
     )
 
     def find(self, request: NormalizedRequest, entry: AccessLogEntry) -> str:
