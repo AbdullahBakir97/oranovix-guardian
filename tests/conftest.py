@@ -1,8 +1,16 @@
-"""Shared fixtures: a tiny OSV database built from ``tests/fixtures/osv``."""
+"""Shared fixtures: a tiny OSV database built from ``tests/fixtures/osv``.
+
+All data the code under test writes by default (settings.json, the
+databases, custom rules, reports) goes to a temporary data folder, never
+into the project root of the developer running the tests.
+"""
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import socket
+import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List
@@ -13,6 +21,16 @@ from scanner_engine.deps.osv_db import OSVDatabase
 from scanner_engine.deps.versions import Ecosystem
 
 OSV_FIXTURES = Path(__file__).parent / "fixtures" / "osv"
+
+_TEST_DATA_DIR = tempfile.mkdtemp(prefix="oranovix-test-data-")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    os.environ["ORANOVIX_DATA_DIR"] = _TEST_DATA_DIR
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    shutil.rmtree(_TEST_DATA_DIR, ignore_errors=True)
 
 
 @pytest.fixture
