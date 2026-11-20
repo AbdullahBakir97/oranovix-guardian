@@ -4,12 +4,11 @@ P4 implementation: critical / complete / error tones with settings persistence.
 """
 from __future__ import annotations
 
-import json
-import os
 import sys
 import threading
-from pathlib import Path
 from typing import List, Tuple
+
+from core.settings_file import SettingsFile
 
 
 class SoundManager:
@@ -96,33 +95,13 @@ class SoundManager:
     # Settings persistence
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _settings_path() -> str:
-        if getattr(sys, "frozen", False):
-            return os.path.join(os.path.dirname(sys.executable), "settings.json")
-        return str(Path(__file__).parent.parent / "settings.json")
-
     def _save_settings(self) -> None:
-        try:
-            path = self._settings_path()
-            data: dict = {}
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            data["sound_enabled"] = self._enabled
-            data["sound_volume"]  = self._volume
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception:
-            pass
+        SettingsFile().set_many(sound_enabled=self._enabled, sound_volume=self._volume)
 
     def _load_settings(self) -> None:
+        data = SettingsFile().read()
+        self._enabled = bool(data.get("sound_enabled", True))
         try:
-            path = self._settings_path()
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                self._enabled = bool(data.get("sound_enabled", True))
-                self._volume  = float(data.get("sound_volume", 1.0))
-        except Exception:
-            pass
+            self._volume = max(0.0, min(1.0, float(data.get("sound_volume", 1.0))))
+        except (TypeError, ValueError):
+            self._volume = 1.0

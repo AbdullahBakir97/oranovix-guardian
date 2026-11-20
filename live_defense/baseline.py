@@ -16,7 +16,6 @@ import os
 import secrets
 import sqlite3
 import stat
-import sys
 import threading
 from contextlib import closing
 from dataclasses import dataclass
@@ -24,6 +23,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 
+from core.app_paths import AppPaths, DataFile
 from core.secret_store import SecretStore
 
 from .classifier import ChangeClassifier
@@ -245,9 +245,7 @@ class Baseline:
 
     @staticmethod
     def default_path() -> Path:
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent / "integrity.db"
-        return Path(__file__).resolve().parents[1] / "integrity.db"
+        return AppPaths.data_file(DataFile.INTEGRITY)
 
     @property
     def root(self) -> str:

@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 import threading
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Collection, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from core.app_paths import AppPaths, DataFile
 from scanner_engine.base import Severity
 
 from .models import (
@@ -75,9 +75,7 @@ class FeedDatabase:
 
     @staticmethod
     def default_path() -> Path:
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent / "feed.db"
-        return Path(__file__).resolve().parents[1] / "feed.db"
+        return AppPaths.data_file(DataFile.FEED)
 
     @property
     def path(self) -> Path:

@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import sys
 import threading
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+from core.app_paths import AppPaths, DataFile
 
 
 @dataclass(frozen=True)
@@ -66,9 +67,7 @@ class TailStateStore:
 
     @staticmethod
     def default_path() -> Path:
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent / "log_sentinel_state.db"
-        return Path(__file__).resolve().parents[1] / "log_sentinel_state.db"
+        return AppPaths.data_file(DataFile.SENTINEL_STATE)
 
     def get(self, path: str) -> Optional[TailPosition]:
         with self._lock, closing(self._connect()) as conn:

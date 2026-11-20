@@ -8,13 +8,11 @@ Works in both development (source) and frozen (--onefile/--onedir) modes:
 from __future__ import annotations
 
 import os
-import sys
 
 
 def _base() -> str:
-    if getattr(sys, "frozen", False):
-        return sys._MEIPASS          # type: ignore[attr-defined]
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    from core.app_paths import AppPaths
+    return str(AppPaths.resource_dir())
 
 
 def get_asset_path(filename: str) -> str:

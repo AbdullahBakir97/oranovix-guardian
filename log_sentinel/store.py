@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
-import sys
 import threading
 from contextlib import closing
 from dataclasses import dataclass, replace
@@ -19,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from core.app_paths import AppPaths, DataFile
 from scanner_engine.base import Severity
 
 from .events import EventSink, EventState, SecurityEvent
@@ -95,9 +95,7 @@ class SecurityEventStore(EventSink):
 
     @staticmethod
     def default_path() -> Path:
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent / "security_events.db"
-        return Path(__file__).resolve().parents[1] / "security_events.db"
+        return AppPaths.data_file(DataFile.SECURITY_EVENTS)
 
     @property
     def path(self) -> Path:

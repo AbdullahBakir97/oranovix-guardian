@@ -18,11 +18,15 @@ Version: 1.0.0
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional
+
+from core.app_paths import AppPaths, DataFile
+from core.storage_problems import StorageProblems
 
 from .base import Issue, Language, Severity
 from .categories import IssueCategory
@@ -145,6 +149,11 @@ class RuleEngine:
 
     def __init__(self, rules_dir: Optional[str] = None) -> None:
         self._rules_dir: Path = self._resolve_rules_dir(rules_dir)
+        # The shipped rules are read-only; the user's rules live in the data
+        # folder. With an explicit *rules_dir* both are in that folder.
+        self._custom_path: Path = (
+            Path(rules_dir) / "custom_rules.json" if rules_dir else AppPaths.data_file(DataFile.CUSTOM_RULES)
+        )
         self._rules: List[Rule] = []
         self.load_rules()
 
@@ -154,13 +163,10 @@ class RuleEngine:
 
     @staticmethod
     def _resolve_rules_dir(rules_dir: Optional[str]) -> Path:
-        """Resolve the rules directory for both dev and frozen-exe deployments."""
-        import sys
+        """Folder of ``default_rules.json``: *rules_dir*, or the bundled resources."""
         if rules_dir:
             return Path(rules_dir)
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent / "rules"
-        return Path(__file__).parent.parent / "rules"
+        return AppPaths.resource("rules")
 
     # ------------------------------------------------------------------
     # Rule loading
@@ -174,7 +180,7 @@ class RuleEngine:
         """
         self._rules = []
         default_path = self._rules_dir / "default_rules.json"
-        custom_path  = self._rules_dir / "custom_rules.json"
+        custom_path  = self._custom_path
 
         if default_path.exists():
             self._rules.extend(self._load_file(default_path, builtin=True))
@@ -273,17 +279,16 @@ class RuleEngine:
 
     def _save_custom(self) -> None:
         """Write all non-builtin rules to custom_rules.json."""
-        self._rules_dir.mkdir(parents=True, exist_ok=True)
         custom = [r for r in self._rules if not r.is_builtin]
         data = {"rules": [r.to_dict() for r in custom]}
-        custom_path = self._rules_dir / "custom_rules.json"
+        custom_path = self._custom_path
+        temp = custom_path.with_name(custom_path.name + ".tmp")
         try:
-            custom_path.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except OSError:
-            pass
+            custom_path.parent.mkdir(parents=True, exist_ok=True)
+            temp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            os.replace(temp, custom_path)
+        except OSError as exc:
+            StorageProblems.report("custom rules", custom_path, exc)
 
     # ------------------------------------------------------------------
     # Scanning

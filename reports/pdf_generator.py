@@ -27,7 +27,6 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
 from xml.sax.saxutils import escape
 
@@ -55,7 +54,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.language_manager import LanguageManager
-from scanner_engine.base import Issue, ScanResult, Severity
+from core.app_paths import AppPaths
+from scanner_engine.base import ScanResult, Severity
 
 if TYPE_CHECKING:
     from log_sentinel.export import AttackReport
@@ -1035,13 +1035,8 @@ class PDFReportGenerator:
         out_dir = self._config.output_dir
         # Resolve relative paths against the project root (or executable directory).
         if not os.path.isabs(out_dir):
-            if getattr(sys, "frozen", False):
-                # PyInstaller sets sys.frozen; use the executable's directory.
-                base = os.path.dirname(sys.executable)
-            else:
-                # Normal execution: go up one level from the reports/ package.
-                base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            out_dir = os.path.join(base, out_dir)
+            # Relative to the data folder: the install folder is read-only.
+            out_dir = os.path.join(str(AppPaths.data_dir()), out_dir)
         os.makedirs(out_dir, exist_ok=True)
         return os.path.join(out_dir, f"oranovix_report_{name}_{ts}.pdf")
 

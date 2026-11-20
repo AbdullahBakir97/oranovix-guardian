@@ -6,7 +6,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from typing import Callable, List
 
 import customtkinter as ctk
 
@@ -151,10 +150,8 @@ class ReportsPage(ctk.CTkFrame):
 
     @staticmethod
     def _reports_dir() -> str:
-        if getattr(sys, "frozen", False):
-            return os.path.join(os.path.dirname(sys.executable), "reports", "output")
-        from pathlib import Path
-        return str(Path(__file__).parent.parent.parent / "reports" / "output")
+        from core.app_paths import AppPaths
+        return str(AppPaths.reports_dir())
 
     def refresh_theme(self) -> None:
         tm = ThemeManager()
