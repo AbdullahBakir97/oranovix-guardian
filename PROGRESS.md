@@ -129,6 +129,32 @@ Known limits:
 - `%{...}` in a URL is reported as an expression even when an application uses it for its own templates.
 - Shellshock payloads are not added to `tests/fixtures/log_sentinel/true_positives.txt`: the antivirus quarantined that file when they were written into it. The tests build them at runtime instead.
 
+### Phase 7: release check (branch `chore/release-check`)
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | `build_tools/build.ps1` builds the one-file exe with `--collect-all bandit --collect-all stevedore --copy-metadata bandit --hidden-import keyring.backends.Windows --hidden-import truststore --collect-data certifi`, plus `--collect-data customtkinter`, `--collect-submodules arabic_reshaper`, and the bundled assets, translations and `rules/default_rules.json`; then Inno Setup 6. | `build_tools/build.ps1` |
+| 2 | Installer: `SourceDir=..` (paths were resolved from `build_tools\`, where `dist\` and `assets\` do not exist), `x64compatible` instead of the deprecated `x64`. Builds `dist\Oranovix_Guardian_Setup_v1.1.0.exe`. | `build_tools/installer.iss` |
+| 3 | README: "Scans offline, optional online AI" instead of "100% offline"; build instructions point to `build.ps1`; new section "Where your data is". | `README.md` |
+
+Checked on the build machine (non-elevated session, exe copied into a folder with a write-deny ACL, `LOCALAPPDATA` pointed to a test folder): the exe starts and keeps running; `scan_history.db`, `feed.db`, `security_events.db`, `reports\output` and `rules\` are created in `<LOCALAPPDATA>\Oranovix Guardian`; nothing is written next to the exe. A second start shows "Oranovix Guardian is already running" (a message box) and no second window.
+
+To check by hand after installing the setup to Program Files and logging in as a standard (non-admin) user:
+
+1. Switch to the light theme, close the app, start it again: still light (`%LOCALAPPDATA%\Oranovix Guardian\settings.json` has `"theme": "light"`).
+2. Scan any folder; the dashboard shows it under recent scans after a restart.
+3. Scan `tests\corpus` (or any file with a hardcoded password): the CRITICAL alarm plays its sound, the red toast appears, the taskbar button flashes.
+4. Open Threat Feed (answer the first-run question) and Log Sentinel ("Analyse a sample log"): no error.
+5. Export the PDF report: the file is in `%LOCALAPPDATA%\Oranovix Guardian\reports\output`, and a password from the scan is shown as `****` or `AKIA…MPLE`.
+6. Nothing new appears in `C:\Program Files\Oranovix Guardian`.
+7. Start the app a second time: the message appears and the open window comes to the front.
+8. With a Gemini key and online AI allowed: "AI Fix" and the AI analysis work through `google-genai`.
+
+Known limits:
+
+- The installer itself was built but not run: installing to Program Files needs an elevated prompt, and the standard-user checks need a second account. The list above covers them.
+- The exe is not code-signed; SmartScreen will warn on first start.
+
 ## Log Sentinel (branch `feature/log-sentinel`)
 
 Goal: read the web server's access logs on this computer, report attacks, and link them with the file integrity monitor. Detection only: nothing is blocked and nothing from the logs is sent anywhere.
