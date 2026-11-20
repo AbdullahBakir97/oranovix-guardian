@@ -95,8 +95,7 @@ class PHPScanner(BaseScanner):
         """
         files = self.collect_files(target, self.SUPPORTED_EXTENSIONS)
         result.files_scanned = len(files)
-        for fpath in files:
-            result.issues.extend(self._scan_file(fpath))
+        self.scan_each(files, result, self._scan_file)
         return result
 
     # ------------------------------------------------------------------

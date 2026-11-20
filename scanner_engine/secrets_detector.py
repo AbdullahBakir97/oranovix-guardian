@@ -298,8 +298,7 @@ class SecretsDetector(BaseScanner):
         )
         result.files_scanned = len(files)
 
-        for file_path in files:
-            result.issues.extend(self._scan_file(file_path))
+        self.scan_each(files, result, self._scan_file)
 
         return result
 

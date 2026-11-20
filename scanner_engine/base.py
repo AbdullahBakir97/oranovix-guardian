@@ -20,16 +20,67 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Callable, Iterable, List, Optional, Tuple
 
 from .categories import IssueCategory
 
 
 # Third-party and generated folders that no engine should scan.
+# ``migrations`` is scanned: RunSQL can hold injectable SQL.
 EXCLUDED_DIRS: frozenset[str] = frozenset({
-    "venv", ".venv", "env", "node_modules", "__pycache__", ".git",
-    "dist", "build", "site-packages", "migrations",
+    "venv", ".venv", "node_modules", "__pycache__", ".git", "dist", "site-packages",
 })
+# Skipped only when they hold a virtual environment or generated output.
+MAYBE_GENERATED_DIRS: frozenset[str] = frozenset({"env", "build"})
+
+
+def _looks_generated(folder: str) -> bool:
+    """A virtual environment, or build output of setuptools or PyInstaller."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return False
+    if "pyvenv.cfg" in names or "CMakeCache.txt" in names:
+        return True
+    if any(name.startswith(("bdist.", "lib.", "temp.")) for name in names):
+        return True                                     # setuptools build/
+    if any(name.endswith(".toc") for name in names):
+        return True                                     # PyInstaller work folder
+    for name in names:                                  # PyInstaller build/<app>/
+        sub = os.path.join(folder, name)
+        if os.path.isdir(sub):
+            try:
+                if any(child.endswith(".toc") for child in os.listdir(sub)):
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def skip_dir(parent: str, name: str) -> bool:
+    """``True`` for a folder no engine should enter."""
+    lower = name.lower()
+    if lower in EXCLUDED_DIRS:
+        return True
+    path = os.path.join(parent, name)
+    if lower in MAYBE_GENERATED_DIRS:
+        return _looks_generated(path)
+    return os.path.isfile(os.path.join(path, "pyvenv.cfg"))   # a venv under any name
+
+
+def is_inside(path: str, root: str) -> bool:
+    """``True`` when the real *path* lies in the real *root*."""
+    path_key = os.path.normcase(os.path.realpath(path))
+    root_key = os.path.normcase(os.path.realpath(root))
+    try:
+        return os.path.commonpath([path_key, root_key]) == root_key
+    except ValueError:                                  # other drive
+        return False
+
+
+def is_link(path: str) -> bool:
+    isjunction = getattr(os.path, "isjunction", None)
+    return os.path.islink(path) or bool(isjunction and isjunction(path))
 
 
 class FileMatcher:
@@ -634,9 +685,68 @@ class BaseScanner(ABC):
 
         collected: List[str] = []
         for root, dirs, files in os.walk(target):
-            dirs[:] = [d for d in dirs if d.lower() not in EXCLUDED_DIRS]
+            # A link or junction is followed only when it stays inside the
+            # scan root: a link to /outside/secret.py must not be read.
+            dirs[:] = [
+                d for d in dirs
+                if not skip_dir(root, d)
+                and (not is_link(os.path.join(root, d)) or is_inside(os.path.join(root, d), target))
+            ]
             for name in files:
-                if matcher.matches(name):
-                    collected.append(os.path.join(root, name))
+                if not matcher.matches(name):
+                    continue
+                path = os.path.join(root, name)
+                if is_link(path) and not is_inside(path, target):
+                    continue
+                collected.append(path)
         collected.sort()
         return collected
+
+    # ------------------------------------------------------------------
+    # Per-file isolation and size cap
+    # ------------------------------------------------------------------
+
+    #: Files larger than this are listed in the warnings, never read.
+    MAX_FILE_BYTES = 5 * 1024 * 1024
+
+    @staticmethod
+    def not_analysed(result: ScanResult, path: str, reason: str) -> None:
+        """Record ``<file>: not analysed (<reason>)`` once."""
+        warning = f"{path}: not analysed ({reason})"
+        if warning not in result.engine_warnings:
+            result.engine_warnings.append(warning)
+
+    @classmethod
+    def within_size_limit(cls, files: Iterable[str], result: ScanResult) -> List[str]:
+        """*files* without those above ``MAX_FILE_BYTES``, which are reported."""
+        kept: List[str] = []
+        for path in files:
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            if size > cls.MAX_FILE_BYTES:
+                cls.not_analysed(result, path, f"larger than {cls.MAX_FILE_BYTES // (1024 * 1024)} MB")
+            else:
+                kept.append(path)
+        return kept
+
+    @classmethod
+    def isolated(
+        cls, result: ScanResult, path: str, work: Callable[[], Iterable[Issue]], what: str = ""
+    ) -> List[Issue]:
+        """Run *work* for one file; any exception (RecursionError, MemoryError...)
+        becomes a warning and the scan goes on with the next file."""
+        try:
+            return list(work())
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+            cls.not_analysed(result, path, f"{what}: {reason}" if what else reason)
+            return []
+
+    def scan_each(
+        self, files: Iterable[str], result: ScanResult, scan_file: Callable[[str], Iterable[Issue]]
+    ) -> None:
+        """Size cap plus per-file isolation for the simple one-pass scanners."""
+        for path in self.within_size_limit(files, result):
+            result.issues.extend(self.isolated(result, path, lambda p=path: scan_file(p)))

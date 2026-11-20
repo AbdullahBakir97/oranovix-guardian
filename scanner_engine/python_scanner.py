@@ -334,6 +334,7 @@ class PythonScanner(BaseScanner):
 
         files = self.collect_files(target, self.SUPPORTED_EXTENSIONS)
         result.files_scanned = len(files)
+        files = self.within_size_limit(files, result)
         if not files:
             return result
 
@@ -343,26 +344,32 @@ class PythonScanner(BaseScanner):
             (i.rule_id, i.file_path, i.line_number) for i in result.issues
         }
 
+        # Each file, and each analyzer on it, runs on its own: a file that
+        # breaks one analyzer (e.g. RecursionError on a 100,000-term
+        # expression) is reported and every other check still runs.
+        analyzers = (
+            ("AST rules", ASTAnalyzer.analyze),
+            ("Django rules", DjangoAnalyzer.analyze),
+            ("Django settings rules", DjangoSettingsAnalyzer.analyze),
+        )
         for file_path in files:
-            for issue in self._extra_checks(file_path):
+            try:
+                code = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+            except OSError as exc:
+                self.not_analysed(result, file_path, f"unreadable: {exc.strerror or exc}")
+                continue
+            found = self.isolated(
+                result, file_path, lambda p=file_path, c=code: self._extra_checks_in(p, c), "regex checks"
+            )
+            for what, analyze in analyzers:
+                found += self.isolated(
+                    result, file_path, lambda a=analyze, p=file_path, c=code: a(c, p), what
+                )
+            for issue in found:
                 key = (issue.rule_id, issue.file_path, issue.line_number)
                 if key not in seen:
                     result.issues.append(issue)
                     seen.add(key)
-
-            try:
-                code = Path(file_path).read_text(encoding="utf-8", errors="ignore")
-                for issue in (
-                    *ASTAnalyzer.analyze(code, file_path),
-                    *DjangoAnalyzer.analyze(code, file_path),
-                    *DjangoSettingsAnalyzer.analyze(code, file_path),
-                ):
-                    key = (issue.rule_id, issue.file_path, issue.line_number)
-                    if key not in seen:
-                        result.issues.append(issue)
-                        seen.add(key)
-            except OSError:
-                pass
 
         return result
 
@@ -414,13 +421,16 @@ class PythonScanner(BaseScanner):
         The former SEC002 open() path-traversal regex is disabled: it could
         not tell user input from safe paths.  It will return as a taint rule.
         """
-        extra: List[Issue] = []
         try:
             source = Path(file_path).read_text(encoding="utf-8", errors="ignore")
         except OSError:
             # File unreadable (permission error, deleted, etc.) – skip silently
-            return extra
+            return []
+        return self._extra_checks_in(file_path, source)
 
+    def _extra_checks_in(self, file_path: str, source: str) -> List[Issue]:
+        """``_extra_checks`` on text already read."""
+        extra: List[Issue] = []
         lines = source.splitlines()
 
         # ── Hardcoded secrets ──────────────────────────────────────────
