@@ -1,0 +1,58 @@
+# Ordinary requests of a Django shop and blog. No rule may fire on any of them.
+# request target <TAB> status <TAB> user agent   ("-" = default)
+/admin/	200	-
+/admin/login/?next=/admin/	200	-
+/admin/shop/order/?status__exact=paid&o=-2	200	-
+/admin/shop/order/42/change/	200	-
+/admin/shop/product/?q=O%27Brien&p=2	200	-
+/admin/auth/user/7/password/	200	-
+/admin/jsi18n/	200	-
+/admin/shop/order/42/history/	200	-
+/admin/shop/order/?created__gte=2026-11-01&created__lt=2026-12-01	200	-
+/search/?q=O%27Brien	200	-
+/search/?q=Rock+%27n%27+Roll	200	-
+/search/?q=salt+%26+pepper	200	-
+/search/?q=what%27s+new+in+django+5%3F	200	-
+/search/?q=select+a+union+rep	200	-
+/search/?q=prompt+(engineering)	200	-
+/search/?q=javascript%3A+the+good+parts	200	-
+/search/?q=1%2B1%3D2	200	-
+/search/?q=C%23+and+F%23	200	-
+/search/?q=my--long--title	200	-
+/search/?q=50%25+off	200	-
+/blog/union-select-the-best-candidates/	200	-
+/blog/how-to-select-a-union/	200	-
+/blog/select-from-our-union-of-brands/	200	-
+/blog/etc-passwd-guide/	200	-
+/blog/why-or-1-equals-1-is-funny/	200	-
+/blog/script-writing-for-beginners/	200	-
+/blog/the-sleep-guide-2026/	200	-
+/blog/drop-table-tennis-tips/	200	-
+/blog/admin-tips-for-new-shop-owners/	200	-
+/blog/2026/11/16/hello-world/?utm_source=newsletter&utm_medium=email	200	-
+/static/js/script-v2.js	200	-
+/static/js/app.min.js?v=3.2.1	200	-
+/static/css/main.css?v=20261116	200	-
+/static/admin/js/vendor/jquery/jquery.js	200	-
+/media/uploads/2026/11/team-photo.jpg	200	-
+/media/uploads/report-final_v2.pdf	200	-
+/accounts/login/?next=/checkout/	200	-
+/accounts/password/reset/	200	-
+/checkout/?step=2&coupon=WINTER-2026	200	-
+/api/products/?ordering=-price&page=3&page_size=50	200	-
+/api/orders/?status=open&created_after=2026-11-01T00:00:00Z	200	-
+/share?url=https://example.org/blog/hello-world/	200	-
+/products/?category=cats&sort=price	200	-
+/products/?q=id+card+holder	200	-
+/robots.txt	200	-
+/sitemap.xml	200	-
+/favicon.ico	200	-
+/.well-known/security.txt	200	-
+/feed/?format=rss	200	-
+/contact/?subject=Re%3A+your+order+%2342	200	-
+/	200	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36
+/	200	Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15
+/	200	Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
+/	200	python-requests/2.32.3
+/admin/	302	Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0
+/wp-login.php	200	-

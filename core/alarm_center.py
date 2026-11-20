@@ -33,6 +33,7 @@ from core.language_manager import LanguageManager
 from core.scan_history import ScanHistory
 from core.sound_manager import SoundManager
 from scanner_engine.base import Issue, Language, Severity
+from scanner_engine.categories import IssueCategory
 
 
 class AlarmLevel(Enum):
@@ -237,6 +238,8 @@ class AlarmCenter:
     @staticmethod
     def language_label(issue: Issue) -> str:
         """Name shown for the issue's file type; config files are "Config"."""
+        if issue.category is IssueCategory.ATTACK:
+            return LanguageManager().t("language_web_log")
         if issue.language is Language.CONFIG:
             return LanguageManager().t("language_config")
         return issue.language.value

@@ -159,6 +159,11 @@ class LiveDefenseController:
             last_error=report.error if report else "",
         )
 
+    def open_events(self) -> List[IntegrityEvent]:
+        """Open events of the running monitor; safe to call from any thread."""
+        monitor = self._monitor
+        return monitor.open_events() if monitor is not None and monitor.is_running else []
+
     def resume_candidate(self) -> str:
         """The root to offer for resuming, or ``""``: it was running when the app closed."""
         saved = self._settings.load()

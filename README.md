@@ -100,6 +100,14 @@ My Projects lists your projects with their last scan, the feed items that affect
 
 ---
 
+## Log Sentinel
+
+Log Sentinel reads the access logs of your web server (nginx, Apache, Caddy; combined, common or JSON lines) on this computer and reports attacks: SQL injection, XSS, path traversal and file inclusion, command injection, SSRF, template injection, Log4j probes, probes for sensitive files and foreign admin panels, attack tools, brute force on logins, path scans and floods. When Live Defense has found a planted file in a public folder and the log shows it being served, Log Sentinel raises one critical alarm: a web shell is probably in use. Detection only: nothing is blocked.
+
+Privacy (DSGVO): nothing from the logs leaves the computer. IP addresses are stored shortened (IPv4 /24, IPv6 /48) with a keyed hash unless you switch on "Keep full IP addresses"; credential values in URLs are hidden; events are deleted after 30 days by default. Use "Analyse a sample log" to see it work before pointing it at a real log.
+
+---
+
 ## Supported Languages & Rules
 
 | Language | Engine | Key Rules |

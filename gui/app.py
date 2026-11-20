@@ -50,6 +50,8 @@ from gui.status_bar        import StatusBar
 if TYPE_CHECKING:
     from live_defense.controller import LiveDefenseController, LiveDefenseState
     from threat_intel.hub import HubState, ThreatIntelHub
+    from log_sentinel.controller import LogSentinelController
+    from log_sentinel.controller import SentinelState as LogSentinelState
 # gui.pages and scanner_engine are imported lazily inside methods
 # to keep startup fast (splash appears before heavy imports load)
 
@@ -98,6 +100,7 @@ class CodeGuardianApp(ctk.CTk):
         self._scan_result:   Optional[object] = None
         self._live_defense:  Optional[LiveDefenseController] = None
         self._threat_hub:    Optional[ThreatIntelHub] = None
+        self._log_sentinel:  Optional[LogSentinelController] = None
         self._feed_report_shown: Optional[object] = None
 
         # Register observers so theme/language changes trigger a rebuild.
@@ -234,7 +237,7 @@ class CodeGuardianApp(ctk.CTk):
         # Small delay before patching the taskbar entry; the HWND must be
         # fully visible for SetWindowLongW to take effect reliably.
         self.after(100, self._restore_taskbar_entry)
-        self.after(400, self._offer_live_defense_resume)
+        self.after(400, self._offer_resumes)
         self.after(900, self._start_threat_feed)
 
     # ------------------------------------------------------------------
@@ -304,7 +307,7 @@ class CodeGuardianApp(ctk.CTk):
         """
         from gui.pages import (
             ScannerPage, ResultsPage, ReportsPage, SettingsPage, LiveDefensePage,
-            ThreatFeedPage, ProjectsPage,
+            ThreatFeedPage, ProjectsPage, LogSentinelPage,
         )
 
         args = dict(master=self._content)
@@ -333,6 +336,10 @@ class CodeGuardianApp(ctk.CTk):
             on_status=self._status_bar.set_status,
             on_scan_result=self._on_scan_complete,
         )
+        sentinel = self._log_sentinel_controller()
+        self._pages["log_sentinel"] = LogSentinelPage(
+            **args, controller=sentinel, on_status=self._status_bar.set_status,
+        )
         hub = self._threat_intel_hub()
         self._pages["threat_feed"] = ThreatFeedPage(**args, hub=hub)
         self._pages["projects"] = ProjectsPage(
@@ -350,7 +357,9 @@ class CodeGuardianApp(ctk.CTk):
             threat_hub=hub,
         )
         self._status_bar.set_monitoring(controller.is_running)
+        self._status_bar.set_watching_logs(sentinel.is_running)
         self._sidebar.set_badge("threat_feed", hub.store.unread_for_you())
+        self._sidebar.set_badge("log_sentinel", sentinel.state().open_alarming)
 
     # ------------------------------------------------------------------
     # Live Defense
@@ -375,6 +384,11 @@ class CodeGuardianApp(ctk.CTk):
         except tk.TclError:
             pass                # status bar is being rebuilt
 
+    def _offer_resumes(self) -> None:
+        """One question after the other: two dialogs must not open at once."""
+        self._offer_live_defense_resume()
+        self._offer_log_sentinel_resume()
+
     def _offer_live_defense_resume(self) -> None:
         from gui.confirm_dialog import ConfirmDialog
         controller = self._live_defense_controller()
@@ -388,6 +402,54 @@ class CodeGuardianApp(ctk.CTk):
         )
         if not choice:
             controller.stop()
+            return
+        try:
+            controller.start()
+        except Exception as exc:
+            self._status_bar.set_status(str(exc), "error")
+        controller.notify()
+
+    # ------------------------------------------------------------------
+    # Log Sentinel
+    # ------------------------------------------------------------------
+
+    def _log_sentinel_controller(self) -> LogSentinelController:
+        """Outlives UI rebuilds. Linked to Live Defense for planted files being served."""
+        if self._log_sentinel is None:
+            from core.secret_store import SecretStore, SERVICE_NAME
+            from log_sentinel.controller import LogSentinelController
+            from log_sentinel.monitor import IntegrityPlantedPaths
+            from log_sentinel.privacy import HashKeyProvider
+            live_defense = self._live_defense_controller()
+            self._log_sentinel = LogSentinelController(
+                dispatch=lambda fn: self.after(0, fn),
+                alarm_center=self._alarm_center,
+                key_store=SecretStore(SERVICE_NAME, HashKeyProvider.ENTRY),
+                planted=IntegrityPlantedPaths(live_defense.open_events),
+            )
+            self._log_sentinel.add_listener(self._on_log_sentinel_state)
+        return self._log_sentinel
+
+    def _on_log_sentinel_state(self, state: LogSentinelState) -> None:
+        try:
+            self._status_bar.set_watching_logs(state.running)
+            self._sidebar.set_badge("log_sentinel", state.open_alarming)
+        except tk.TclError:
+            pass                # being rebuilt
+
+    def _offer_log_sentinel_resume(self) -> None:
+        from gui.confirm_dialog import ConfirmDialog
+        controller = self._log_sentinel_controller()
+        logs = controller.resume_candidate()
+        if not logs:
+            return
+        lm = LanguageManager()
+        if not ConfirmDialog.ask(
+            self, lm.t("ls_resume_title"), lm.t("ls_resume_text", logs="\n".join(logs)),
+            lm.t("ls_resume_yes"), lm.t("ls_resume_no"),
+        ):
+            controller.stop()
+            controller.notify()
             return
         try:
             controller.start()
@@ -452,6 +514,8 @@ class CodeGuardianApp(ctk.CTk):
             self._live_defense.shutdown()
         if self._threat_hub is not None:
             self._threat_hub.shutdown()
+        if self._log_sentinel is not None:
+            self._log_sentinel.shutdown()
         super().destroy()
 
     def _navigate(self, page_id: str) -> None:
