@@ -512,5 +512,6 @@
   "storage_write_failed": "Oranovix Guardian konnte {what} nicht speichern.\n\nDatei: {path}\nGrund: {reason}\n\n\u00c4nderungen daran gehen beim Schlie\u00dfen verloren. Pr\u00fcfen Sie, ob der Datenordner beschreibbar ist:\n{folder}",
   "storage_what_settings": "die Einstellungen",
   "storage_what_scan_history": "den Scan-Verlauf",
-  "storage_what_custom_rules": "die eigenen Regeln"
+  "storage_what_custom_rules": "die eigenen Regeln",
+  "rules_rejected": "Diese Regeln wurden nicht importiert:\n\n{rules}"
 }

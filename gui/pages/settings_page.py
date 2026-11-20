@@ -38,7 +38,7 @@ from core.secret_store        import SecretStore, SecretStoreError
 from core.sound_manager       import SoundManager
 from scanner_engine.deps.osv_db import OSVDatabase, OSVUpdateError
 from scanner_engine.gemini_config import GEMINI_API_KEY_ENV, GeminiConfig
-from scanner_engine.rule_engine import RuleEngine, Rule, RuleLanguage
+from scanner_engine.rule_engine import RuleEngine, Rule, RuleLanguage, RulePatternError
 
 if TYPE_CHECKING:
     from threat_intel.hub import ThreatIntelHub
@@ -839,8 +839,15 @@ class SettingsPage(ctk.CTkFrame):
         )
         if not path:
             return
-        count = self._engine.import_rules(path)
+        self._engine.import_rules(path)
         self._refresh_rules_list()
+        if self._engine.last_rejected:
+            from tkinter import messagebox
+            messagebox.showwarning(
+                lm.t("import_rules"),
+                lm.t("rules_rejected", rules="\n".join(self._engine.last_rejected)),
+                parent=self,
+            )
 
     def _export_rules(self) -> None:
         lm = LanguageManager()
@@ -995,7 +1002,11 @@ class SettingsPage(ctk.CTkFrame):
                 fix_suggestion=e_fix.get().strip(),
                 is_builtin=False,
             )
-            self._engine.add_rule(rule)
+            try:
+                self._engine.add_rule(rule)
+            except RulePatternError as exc:
+                test_result_lbl.configure(text=f"⚠ {exc}", text_color=tm.c("error"))
+                return
             self._refresh_rules_list()
             dlg.destroy()
 

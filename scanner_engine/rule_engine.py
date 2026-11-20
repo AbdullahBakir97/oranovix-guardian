@@ -22,14 +22,103 @@ import os
 import re
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Pattern
 
 from core.app_paths import AppPaths, DataFile
 from core.storage_problems import StorageProblems
 
 from .base import Issue, Language, Severity
 from .categories import IssueCategory
+
+
+# ---------------------------------------------------------------------------
+# Pattern checks
+# ---------------------------------------------------------------------------
+
+_FLAGS = re.MULTILINE | re.IGNORECASE
+
+# A group repeated with + * or {n,} whose body itself repeats or offers
+# alternatives: (a+)+ , (\w*)* , (a|aa)*. Python's re has no time limit,
+# and such a pattern can backtrack for longer than the age of the universe.
+_UNBOUNDED_REPEAT = re.compile(r"(?:[+*]|\{\d*,\})")
+
+
+class RulePatternError(ValueError):
+    """A custom rule's regular expression was refused; the text says why."""
+
+
+@lru_cache(maxsize=1024)
+def _compiled(pattern: str) -> Pattern[str]:
+    """Each pattern is compiled once for the whole process."""
+    return re.compile(pattern, _FLAGS)
+
+
+def _has_nested_repeat(pattern: str) -> bool:
+    """A repeated group that contains a repeat or an alternation."""
+    stack: List[int] = []           # start index of each open group
+    groups: List[tuple] = []        # (start, end) of closed groups
+    escaped = in_class = False
+    for index, char in enumerate(pattern):
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif in_class:
+            in_class = char != "]"
+        elif char == "[":
+            in_class = True
+        elif char == "(":
+            stack.append(index)
+        elif char == ")" and stack:
+            groups.append((stack.pop(), index))
+    for start, end in groups:
+        after = pattern[end + 1:end + 8]
+        if not _UNBOUNDED_REPEAT.match(after):
+            continue
+        body = _strip_classes_and_escapes(pattern[start + 1:end])
+        if body.startswith("?"):
+            body = body[2:] if body[1:2] in (":", "=", "!", ">") else body
+        if _UNBOUNDED_REPEAT.search(body) or "|" in body:
+            return True
+    return False
+
+
+def _strip_classes_and_escapes(text: str) -> str:
+    """Remove ``[...]`` and escaped characters, which cannot nest a repeat."""
+    out: List[str] = []
+    escaped = in_class = False
+    for char in text:
+        if escaped:
+            escaped = False
+            out.append("x")
+        elif char == "\\":
+            escaped = True
+        elif in_class:
+            if char == "]":
+                in_class = False
+                out.append("x")
+        elif char == "[":
+            in_class = True
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def check_pattern(pattern: str) -> str:
+    """Why *pattern* cannot be used as a custom rule; ``""`` when it can."""
+    try:
+        _compiled(pattern)
+    except re.error as exc:
+        return f"not a valid regular expression ({exc})"
+    if _has_nested_repeat(pattern):
+        return (
+            "a repeated group contains another repeat or alternatives, e.g. (a+)+ or (a|aa)*; "
+            "such a pattern can take practically forever on some lines. Use a character class "
+            "or a single repeat instead, e.g. [ab]+"
+        )
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +244,8 @@ class RuleEngine:
             Path(rules_dir) / "custom_rules.json" if rules_dir else AppPaths.data_file(DataFile.CUSTOM_RULES)
         )
         self._rules: List[Rule] = []
+        #: Custom rules refused at the last load or import, as "<id>: <reason>".
+        self.last_rejected: List[str] = []
         self.load_rules()
 
     # ------------------------------------------------------------------
@@ -179,6 +270,7 @@ class RuleEngine:
             The combined list of Rule objects (also stored as self._rules).
         """
         self._rules = []
+        self.last_rejected = []
         default_path = self._rules_dir / "default_rules.json"
         custom_path  = self._custom_path
 
@@ -198,9 +290,9 @@ class RuleEngine:
             return []
 
         result: List[Rule] = []
-        for item in data.get("rules", []):
+        for item in data.get("rules", []) if isinstance(data, dict) else []:
             try:
-                result.append(Rule(
+                rule = Rule(
                     id=item["id"],
                     name=item["name"],
                     description=item.get("description", ""),
@@ -212,9 +304,16 @@ class RuleEngine:
                     is_builtin=builtin,
                     category=item.get("category", IssueCategory.OTHER.value),
                     exclude_line_pattern=item.get("exclude_line_pattern", ""),
-                ))
-            except KeyError:
+                )
+            except (KeyError, TypeError):
                 continue  # skip malformed entries
+            # The user's rules are checked every time they are loaded: a file
+            # saved by an older version, or edited by hand, was never checked.
+            problem = "" if builtin else self._problem(rule)
+            if problem:
+                self.last_rejected.append(f"{rule.id}: {problem}")
+                continue
+            result.append(rule)
 
         return result
 
@@ -235,9 +334,20 @@ class RuleEngine:
         Args:
             rule: The Rule to add.
         """
+        problem = "" if rule.is_builtin else self._problem(rule)
+        if problem:
+            raise RulePatternError(f"{rule.id}: {problem}")
         self._rules = [r for r in self._rules if r.id != rule.id]
         self._rules.append(rule)
         self._save_custom()
+
+    @staticmethod
+    def _problem(rule: Rule) -> str:
+        problem = check_pattern(str(rule.pattern))
+        if not problem and rule.exclude_line_pattern:
+            problem = check_pattern(str(rule.exclude_line_pattern))
+            problem = f"exclusion pattern is {problem}" if problem else ""
+        return problem
 
     def disable_rule(self, rule_id: str) -> None:
         """Disable a rule by ID and persist the change.
@@ -317,38 +427,37 @@ class RuleEngine:
             issues.extend(self._apply_rule(rule, code, file_path))
         return issues
 
-    @staticmethod
-    def _apply_rule(rule: Rule, code: str, file_path: str) -> List[Issue]:
-        """Return one Issue per match of *rule*, honouring its line exclusion."""
-        flags = re.MULTILINE | re.IGNORECASE
+    #: Characters of a line a rule looks at. Long lines (minified code,
+    #: data) are cut so that no pattern works on megabytes at once.
+    MAX_LINE_LENGTH = 1000
+
+    @classmethod
+    def _apply_rule(cls, rule: Rule, code: str, file_path: str) -> List[Issue]:
+        """One Issue per match of *rule*, line by line, honouring its line exclusion."""
         try:
-            compiled = re.compile(rule.pattern, flags)
-            excluded = (
-                re.compile(rule.exclude_line_pattern, flags)
-                if rule.exclude_line_pattern else None
-            )
+            compiled = _compiled(rule.pattern)
+            excluded = _compiled(rule.exclude_line_pattern) if rule.exclude_line_pattern else None
         except re.error:
             return []
 
-        lines = code.splitlines()
         issues: List[Issue] = []
-        for match in compiled.finditer(code):
-            line_num = code[: match.start()].count("\n") + 1
-            line = lines[line_num - 1] if line_num <= len(lines) else ""
-            if excluded and excluded.search(line):
+        for line_num, line in enumerate(code.splitlines(), start=1):
+            text = line[: cls.MAX_LINE_LENGTH]
+            if excluded and excluded.search(text):
                 continue
-            issues.append(Issue(
-                rule_id=rule.id,
-                title=rule.name,
-                description=rule.description,
-                severity=rule.severity_enum(),
-                file_path=file_path,
-                line_number=line_num,
-                code_snippet=line.strip(),
-                recommendation=rule.fix_suggestion,
-                confidence="MEDIUM",
-                category=rule.category_enum(),
-            ))
+            for _match in compiled.finditer(text):
+                issues.append(Issue(
+                    rule_id=rule.id,
+                    title=rule.name,
+                    description=rule.description,
+                    severity=rule.severity_enum(),
+                    file_path=file_path,
+                    line_number=line_num,
+                    code_snippet=line.strip()[:300],
+                    recommendation=rule.fix_suggestion,
+                    confidence="MEDIUM",
+                    category=rule.category_enum(),
+                ))
         return issues
 
     def scan_file(self, file_path: str, language: Language) -> List[Issue]:
@@ -376,7 +485,13 @@ class RuleEngine:
 
         Returns:
             List of Issues the rule would generate on the sample.
+
+        Raises:
+            RulePatternError: the pattern is invalid or could hang a scan.
         """
+        problem = self._problem(rule)
+        if problem:
+            raise RulePatternError(problem)
         return self._apply_rule(rule, sample_code, "<test>")
 
     # ------------------------------------------------------------------
@@ -403,6 +518,8 @@ class RuleEngine:
         """Import rules from a JSON file as custom rules.
 
         Skips rules whose ID already exists in the current rule set.
+        Rules whose pattern is invalid or could hang a scan are refused and
+        listed in ``last_rejected``.
 
         Args:
             path: Source JSON file to import from.
@@ -410,6 +527,7 @@ class RuleEngine:
         Returns:
             Number of new rules successfully imported.
         """
+        self.last_rejected = []
         imported = self._load_file(Path(path), builtin=False)
         existing_ids = {r.id for r in self._rules}
         count = 0

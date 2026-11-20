@@ -536,5 +536,6 @@
   "storage_write_failed": "Oranovix Guardian could not save the {what}.\n\nFile: {path}\nReason: {reason}\n\nChanges to it are lost when the app closes. Check that the data folder is writable:\n{folder}",
   "storage_what_settings": "settings",
   "storage_what_scan_history": "scan history",
-  "storage_what_custom_rules": "custom rules"
+  "storage_what_custom_rules": "custom rules",
+  "rules_rejected": "These rules were not imported:\n\n{rules}"
 }

@@ -18,7 +18,7 @@ from typing import List
 
 import pytest
 
-from scanner_engine.base import BaseScanner, Issue, ScanResult
+from scanner_engine.base import BaseScanner, Issue, ScanResult, ScanStatus
 from scanner_engine.js_scanner import JSScanner
 from scanner_engine.orchestrator import ScanOrchestrator
 from scanner_engine.python_scanner import PythonScanner
@@ -75,9 +75,9 @@ def test_the_python_engine_reports_the_file_and_completes(project: Path) -> None
 
     result = PythonScanner().scan(str(project))
 
-    assert result.status.value == "completed", result.error_message
+    assert result.status is ScanStatus.COMPLETED, result.error_message
     assert {"DJ005", "DS001"} <= rules(result.issues)
-    warning = next(w for w in result.engine_warnings if "aaa_data.py" in w)
+    warning = next(w for w in result.engine_warnings if "aaa_data.py" in w and "not analysed" in w)
     assert "not analysed" in warning and "RecursionError" in warning
 
 
@@ -105,11 +105,13 @@ def test_a_crashing_file_does_not_stop_the_other_scanners(
     from scanner_engine.php_scanner import PHPScanner
     from scanner_engine.secrets_detector import SecretsDetector
 
+    # Credentials and weak hashes only: shell-shaped lines on disk get locked
+    # by an antivirus, and the scanner would then read nothing.
     scanners = {
-        "js": (JSScanner, ".js", "_scan_file", "eval(req.query.x);\n"),
-        "php": (PHPScanner, ".php", "_scan_file", "<?php eval($_GET['x']); ?>\n"),
-        "java": (JavaScanner, ".java", "_scan_file", "Runtime.getRuntime().exec(request.getParameter(\"c\"));\n"),
-        "csharp": (CSharpScanner, ".cs", "_scan_file", "Process.Start(Request.QueryString[\"c\"]);\n"),
+        "js": (JSScanner, ".js", "_scan_file", 'const password = "S3cr3tPr0dPassw0rd";\n'),
+        "php": (PHPScanner, ".php", "_scan_file", "<?php $h = md5($password); ?>\n"),
+        "java": (JavaScanner, ".java", "_scan_file", 'String password = "S3cr3tPr0dPassw0rd";\n'),
+        "csharp": (CSharpScanner, ".cs", "_scan_file", 'string password = "S3cr3tPr0dPassw0rd";\n'),
         "template": (DjangoTemplateScanner, ".html", "scan_file", "{{ value|safe }}\n"),
         "secrets": (SecretsDetector, ".env", "_scan_file", 'password = "S3cr3tPr0dPassw0rd!"\n'),
     }
@@ -126,7 +128,7 @@ def test_a_crashing_file_does_not_stop_the_other_scanners(
     monkeypatch.setattr(klass, method, flaky)
     result = klass().scan(str(tmp_path))
 
-    assert result.status.value == "completed", result.error_message
+    assert result.status is ScanStatus.COMPLETED, result.error_message
     assert any("b_good" in issue.file_path for issue in result.issues)
     assert any("a_broken" in w and "not analysed" in w for w in result.engine_warnings)
 
@@ -158,7 +160,7 @@ def test_the_rule_engine_loop_is_isolated(tmp_path: Path, monkeypatch: pytest.Mo
 def test_a_file_above_the_size_cap_is_reported_as_skipped(project: Path) -> None:
     big = project / "big.js"
     with open(big, "w", encoding="utf-8") as handle:
-        handle.write("eval(req.query.x);\n")
+        handle.write('const password = "S3cr3tPr0dPassw0rd";\n')
         handle.write(("// filler line " + "x" * 80 + "\n") * (6 * 1024 * 1024 // 96))
     assert big.stat().st_size > 6_000_000
 
