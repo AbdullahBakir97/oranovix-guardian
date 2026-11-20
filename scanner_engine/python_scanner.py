@@ -9,11 +9,13 @@ entry in ``ScanResult.engine_warnings``.
 """
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .bandit_runner import BanditFinding, BanditRunner, BanditUnavailableError
+from .secret_heuristics import SecretHeuristics
 from .categories import IssueCategory, category_for_rule
 from .base import (
     BaseScanner,
@@ -56,6 +58,18 @@ _ESCALATE_TO_CRITICAL: set[str] = {
     "B606",  # os.startfile
     "B608",  # SQL injection via string formatting
 }
+
+# exec()/eval() are CRITICAL only when the code is not a constant string;
+# eval("1 + 1") is MEDIUM, like the AST rule.
+_CRITICAL_UNLESS_CONSTANT: set[str] = {"B102", "B307"}
+
+# Hardcoded password findings are promoted only when Bandit is not unsure
+# and the name and value look like a real secret (SecretHeuristics).
+_SECRET_TESTS: set[str] = {"B105", "B106", "B107"}
+
+# Subprocess findings are promoted only when the command is not a literal:
+# subprocess.run(["ls", "-l"]) is fixed in the source.
+_COMMAND_TESTS: set[str] = {"B603", "B607"}
 
 # Bandit test IDs that should be promoted to HIGH severity to reflect their
 # real-world exploitability even when Bandit assigns MEDIUM.
@@ -142,6 +156,11 @@ _BANDIT_TITLES: dict[str, str] = {
 # holds a secret credential (API key, password, token, etc.) and the value is
 # a non-empty string literal of at least 4 characters.
 # Named groups:  var = the suspicious variable name, val = the literal value.
+_BANDIT_PASSWORD_TEXT = re.compile(r"hardcoded password: '(?P<value>.*)'\s*$", re.IGNORECASE | re.DOTALL)
+_SUBPROCESS_FUNCTIONS = frozenset({
+    "run", "call", "check_call", "check_output", "Popen", "getoutput", "getstatusoutput",
+})
+
 _SECRET_NAME_RE = re.compile(
     r'(?i)^[ \t]*(?:self\.)?(?:\w+\.)?'
     r'(?P<var>api[_-]?key|secret[_-]?key|secret|token|password|passwd|pwd|'
@@ -149,6 +168,133 @@ _SECRET_NAME_RE = re.compile(
     r'\s*=\s*(?:f?["\'])(?P<val>[^"\']{4,})["\']',
     re.MULTILINE,
 )
+
+
+class BanditSeverityPolicy:
+    """Final severity of a Bandit finding.
+
+    Bandit tops out at HIGH and does not know the difference between
+    ``eval(user_input)`` and ``eval("1 + 1")``, or between a password and a
+    form field called ``PASSWORD_FIELD``. This policy looks at the flagged
+    call or assignment in the file before promoting a finding.
+    """
+
+    def __init__(self) -> None:
+        self._sources: Dict[str, Tuple[List[str], Optional[ast.AST]]] = {}
+
+    def severity(self, finding: BanditFinding) -> Severity:
+        own = _BANDIT_SEVERITY_MAP.get(finding.severity, Severity.LOW)
+        test_id = finding.test_id
+        unsure = finding.confidence.upper() == "LOW"
+
+        if test_id in _CRITICAL_UNLESS_CONSTANT:
+            call = self._call_at(finding, lambda name: name in ("eval", "exec"))
+            if call is not None and self._constant_code(call):
+                return Severity.MEDIUM
+            return Severity.CRITICAL
+        if test_id in _ESCALATE_TO_CRITICAL:
+            return Severity.CRITICAL
+        if test_id in _SECRET_TESTS:
+            if unsure or not self._looks_like_secret(finding):
+                return own
+            return Severity.HIGH
+        if test_id in _COMMAND_TESTS:
+            if unsure:
+                return own
+            call = self._call_at(finding, lambda name: name in _SUBPROCESS_FUNCTIONS)
+            if call is not None and self._literal_command(call):
+                return own
+            return Severity.HIGH
+        if test_id in _ESCALATE_TO_HIGH:
+            return Severity.HIGH
+        return own
+
+    # ------------------------------------------------------------------
+    # Hardcoded passwords
+    # ------------------------------------------------------------------
+
+    def _looks_like_secret(self, finding: BanditFinding) -> bool:
+        match = _BANDIT_PASSWORD_TEXT.search(finding.text)
+        if match is None:
+            return True                     # unknown wording: keep Bandit's judgement
+        value = match.group("value")
+        line = finding.code or self._line(finding)
+        return SecretHeuristics.is_secret(self._name_before(line, value), value)
+
+    @staticmethod
+    def _name_before(line: str, value: str) -> str:
+        """The identifier or dict key the value is assigned or compared to."""
+        literal = r"[rbuRBU]{0,2}(?:'" + re.escape(value) + r"'|\"" + re.escape(value) + r"\")"
+        pattern = r"([A-Za-z_][\w.]*)['\"]?\s*(?:==|!=|=|:)\s*" + literal
+        found = re.search(pattern, line)
+        if found:
+            return found.group(1)
+        names = re.findall(r"[A-Za-z_]\w*", line.split(value, 1)[0])
+        return names[-1] if names else ""
+
+    # ------------------------------------------------------------------
+    # Calls
+    # ------------------------------------------------------------------
+
+    def _call_at(self, finding: BanditFinding, wanted) -> Optional[ast.Call]:
+        _, tree = self._source(finding.file_path)
+        if tree is None:
+            return None
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            first, last = node.lineno, getattr(node, "end_lineno", None) or node.lineno
+            if not first <= finding.line_number <= last:
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+            if wanted(name):
+                return node
+        return None
+
+    @staticmethod
+    def _constant_code(call: ast.Call) -> bool:
+        source = call.args[0] if call.args else None
+        return isinstance(source, ast.Constant) and isinstance(source.value, (str, bytes))
+
+    @staticmethod
+    def _literal_command(call: ast.Call) -> bool:
+        command = call.args[0] if call.args else next(
+            (k.value for k in call.keywords if k.arg == "args"), None
+        )
+        if isinstance(command, ast.Constant):
+            return isinstance(command.value, (str, bytes))
+        if isinstance(command, (ast.List, ast.Tuple)):
+            return all(
+                isinstance(part, ast.Constant) and isinstance(part.value, (str, bytes))
+                for part in command.elts
+            )
+        return False
+
+    # ------------------------------------------------------------------
+    # Source cache
+    # ------------------------------------------------------------------
+
+    def _source(self, path: str) -> Tuple[List[str], Optional[ast.AST]]:
+        cached = self._sources.get(path)
+        if cached is None:
+            try:
+                text = Path(path).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                cached = ([], None)
+            else:
+                try:
+                    tree: Optional[ast.AST] = ast.parse(text)
+                except (SyntaxError, ValueError, RecursionError, MemoryError):
+                    tree = None
+                cached = (text.splitlines(), tree)
+            self._sources[path] = cached
+        return cached
+
+    def _line(self, finding: BanditFinding) -> str:
+        lines, _ = self._source(finding.file_path)
+        index = finding.line_number - 1
+        return lines[index] if 0 <= index < len(lines) else ""
 
 
 class PythonScanner(BaseScanner):
@@ -240,15 +386,13 @@ class PythonScanner(BaseScanner):
             result.engine_warnings.append(
                 f"Bandit could not parse {len(report.skipped_files)} file(s): {names}"
             )
-        return [self._issue_from_finding(finding) for finding in report.findings]
+        policy = BanditSeverityPolicy()
+        return [self._issue_from_finding(finding, policy) for finding in report.findings]
 
-    def _issue_from_finding(self, finding: BanditFinding) -> Issue:
-        if finding.test_id in _ESCALATE_TO_CRITICAL:
-            severity = Severity.CRITICAL
-        elif finding.test_id in _ESCALATE_TO_HIGH:
-            severity = Severity.HIGH
-        else:
-            severity = _BANDIT_SEVERITY_MAP.get(finding.severity, Severity.LOW)
+    def _issue_from_finding(
+        self, finding: BanditFinding, policy: Optional[BanditSeverityPolicy] = None
+    ) -> Issue:
+        severity = (policy or BanditSeverityPolicy()).severity(finding)
 
         return Issue(
             rule_id=finding.test_id,
@@ -281,9 +425,11 @@ class PythonScanner(BaseScanner):
 
         # ── Hardcoded secrets ──────────────────────────────────────────
         for m in _SECRET_NAME_RE.finditer(source):
+            var_name = m.group("var")
+            if not SecretHeuristics.is_secret(var_name, m.group("val")):
+                continue                    # token = "test", password = "changeme"
             # Compute the 1-based line number by counting preceding newlines
             line_num = source[: m.start()].count("\n") + 1
-            var_name = m.group("var")
             snippet = lines[line_num - 1].strip() if line_num <= len(lines) else ""
             extra.append(Issue(
                 rule_id="SEC001",
