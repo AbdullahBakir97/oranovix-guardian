@@ -537,5 +537,8 @@
   "storage_what_settings": "settings",
   "storage_what_scan_history": "scan history",
   "storage_what_custom_rules": "custom rules",
-  "rules_rejected": "These rules were not imported:\n\n{rules}"
+  "rules_rejected": "These rules were not imported:\n\n{rules}",
+  "report_settings_title": "Reports",
+  "report_show_secrets": "Show secret values in reports",
+  "report_show_secrets_hint": "Off: passwords, keys and tokens found by the scan are shown shortened in the PDF (AKIA\u2026MPLE), so the report can be shared."
 }
