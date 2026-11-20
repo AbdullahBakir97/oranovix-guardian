@@ -19,7 +19,7 @@ from typing import Any, ClassVar, Dict, Iterable, Iterator, List, Mapping, Optio
 
 from packaging.requirements import InvalidRequirement, Requirement
 
-from ..base import EXCLUDED_DIRS
+from ..base import is_link, is_inside, skip_dir
 from .versions import Ecosystem, SemVer, scheme_for
 
 
@@ -423,6 +423,10 @@ class ManifestFinder:
             return [(str(path.parent), [path.name])]
         folders = []
         for root, dirs, files in os.walk(target):
-            dirs[:] = [d for d in dirs if d.lower() not in EXCLUDED_DIRS]
+            dirs[:] = [
+                d for d in dirs
+                if not skip_dir(root, d)
+                and (not is_link(os.path.join(root, d)) or is_inside(os.path.join(root, d), target))
+            ]
             folders.append((root, files))
         return folders
