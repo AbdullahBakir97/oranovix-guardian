@@ -29,6 +29,27 @@ Known limits:
 - The single-instance check is per data folder: a copy started with another `ORANOVIX_DATA_DIR` is allowed, because it does not share any database.
 - On Windows the second start finds the running window by its title; if it cannot be found, only the message is shown.
 
+### Phase 2: false positives (branch `fix/false-positives`)
+
+Problem: `DangerousFunctionRule` matched any method called `eval`, `exec` or `compile`, so `re.compile`, `model.eval()` and `df.eval` were CRITICAL (22 CRITICAL in a copy of requests and urllib3), and Live Defense rang a CRITICAL alarm with sound when a views.py gained `re.compile`. Placeholder secrets (`token = "test"`) were CRITICAL, B105 and B607 were promoted for form field names and literal command lists, md5 with `usedforsecurity=False` was flagged.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | Dangerous call rule: only the builtins `eval`, `exec`, `compile`, called by bare name or as `builtins.x` / `__builtins__.x`, and only if the module does not bind that name itself (import, assignment, def, parameter; `from builtins import eval` still counts). CRITICAL when the code argument is not a constant string, MEDIUM when it is. A `ModuleContext` gives rules facts about the whole module. | `scanner_engine/ast_analyzer.py` |
+| 2 | `SecretHeuristics`: placeholder values (test, changeme, xxx, example, dummy, empty, template variables like `${X}` or `{{ x }}`, values under 8 characters, URLs without a password, paths) and names ending in `_url`, `_field`, `_header`, `_name`, `_path`, `_label` (also `_uri`, `_file`) are not secrets. Used by SEC001, AST-SEC1, the secrets detector's password rule SEC-PWD01 and the Bandit promotion of B105/B106/B107. | `scanner_engine/secret_heuristics.py`, `scanner_engine/python_scanner.py`, `scanner_engine/secrets_detector.py` |
+| 3 | AST-CRY1 skips `hashlib.md5(..., usedforsecurity=False)`. | `scanner_engine/ast_analyzer.py` |
+| 4 | `BanditSeverityPolicy` looks at the flagged line before promoting: B105/B106/B107 only when confidence is not LOW and the name and value look like a secret; B603/B607 only when confidence is not LOW and the command is not a literal (string or list of strings); B102/B307 CRITICAL only when the code is not a constant string, MEDIUM otherwise. Unpromoted findings keep Bandit's own severity. | `scanner_engine/python_scanner.py` |
+| 5 | Live Defense: `ChangeClassifier.cap_findings` holds code-scan findings at MEDIUM for a modified file and at HIGH for a new one, except secrets and code or command execution (which the scanner rates CRITICAL only for non-constant input). Web shells still come in as signature hits and stay CRITICAL. The capped findings are also what the alarm center receives, so a capped finding cannot ring on its own. | `live_defense/classifier.py`, `live_defense/file_integrity.py` |
+
+Tests: 1886 passing, 5 skipped (77 new). Type check: `uvx pyright`, 0 errors. The findings on `tests/corpus` are identical before and after (same files, lines, categories and severities). A copy of the installed requests and urllib3 now has 0 CRITICAL findings (was 22).
+
+Known limits:
+
+- "Not rebound" is checked for the whole module: if a module defines its own `eval` anywhere, a call to the builtin `eval` elsewhere in that module is not reported.
+- `exec` of a constant string is MEDIUM. Code that builds the string first and passes a variable is CRITICAL even when the variable only ever holds a constant.
+- The placeholder list is a heuristic. A real password shorter than 8 characters is no longer promoted; Bandit still lists it with its own (LOW) severity.
+- Command execution keeps its scanner severity in a changed file, not only code execution: an existing test requires a CRITICAL command-execution finding in a modified file to stay CRITICAL.
+
 ## Log Sentinel (branch `feature/log-sentinel`)
 
 Goal: read the web server's access logs on this computer, report attacks, and link them with the file integrity monitor. Detection only: nothing is blocked and nothing from the logs is sent anywhere.
