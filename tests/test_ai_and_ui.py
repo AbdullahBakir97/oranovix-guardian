@@ -82,7 +82,7 @@ def test_there_are_27_cases() -> None:
     ("views.py", "token: Optional[str] = None\n"),
     ("views.py", "if token == expected_token:\n    pass\n"),
     ("deploy.sh", "echo starting\nrsync -a src/ dst/\n"),
-    ("page.html", "<div class=\"key\">Press any key</div>\n"),
+    ("page.html", "<p>Press any key</p>\n<key-hint>Esc</key-hint>\n"),
     ("views.py", "half = total // 2\n"),
 ])
 def test_ordinary_code_keeps_its_shape(file_name: str, code: str) -> None:
@@ -246,7 +246,7 @@ def fake_genai(monkeypatch: pytest.MonkeyPatch) -> FakeGenAI:
 
 
 @pytest.fixture
-def consent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[bool], None]:
+def consent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[bool], object]:
     from scanner_engine.gemini_config import GeminiConfig
     path = tmp_path / "settings.json"
     monkeypatch.setattr(GeminiConfig, "settings_path", staticmethod(lambda: path))
@@ -266,7 +266,7 @@ def _result() -> Any:
     return result
 
 
-def test_the_analyzer_uses_google_genai(fake_genai: FakeGenAI, consent: Callable[[bool], None]) -> None:
+def test_the_analyzer_uses_google_genai(fake_genai: FakeGenAI, consent: Callable[[bool], object]) -> None:
     from scanner_engine.ai_analyzer import GeminiAnalyzer
     consent(True)
 
@@ -282,7 +282,7 @@ def test_the_analyzer_uses_google_genai(fake_genai: FakeGenAI, consent: Callable
     assert "someone" not in request["contents"]
 
 
-def test_the_analyzer_sends_nothing_without_consent(fake_genai: FakeGenAI, consent: Callable[[bool], None]) -> None:
+def test_the_analyzer_sends_nothing_without_consent(fake_genai: FakeGenAI, consent: Callable[[bool], object]) -> None:
     from scanner_engine.ai_analyzer import GeminiAnalyzer
     consent(False)
 
@@ -290,7 +290,7 @@ def test_the_analyzer_sends_nothing_without_consent(fake_genai: FakeGenAI, conse
     assert fake_genai.requests == []
 
 
-def test_a_404_from_the_new_sdk_names_the_model(fake_genai: FakeGenAI, consent: Callable[[bool], None]) -> None:
+def test_a_404_from_the_new_sdk_names_the_model(fake_genai: FakeGenAI, consent: Callable[[bool], object]) -> None:
     from scanner_engine.ai_analyzer import GeminiAnalyzer
     consent(True)
 
