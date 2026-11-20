@@ -108,6 +108,27 @@ Known limits:
 - In credential files the whole rest of a line after the first separator is replaced, so the AI does not see host or user names there either.
 - A secret in a heredoc is found by the heredoc rule only when the closing tag stands on its own line.
 
+### Phase 6: detection gaps (branch `feature/detection-gaps`)
+
+The audit's 32-case corpus found every Python/Django case but missed these.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | JS016 (CRITICAL): `exec`/`execSync` called by bare name (destructured from `child_process`) or as `child_process.exec`, with concatenation, a template string or request data: `exec('ls ' + req.query.dir)`. A method `x.exec()` (RegExp, query builders) is not matched. | `scanner_engine/js_scanner.py` |
+| 2 | JS017 (HIGH): `res.send`/`res.write`/`res.end` with request data (`req.query`, `req.body`, `req.params`, cookies, headers): reflected XSS. `res.json(req.body)` stays quiet. | `scanner_engine/js_scanner.py` |
+| 3 | JS018 (CRITICAL): MongoDB `$where` (object key or `.$where(...)`) built with concatenation, a template string or request data. A constant `$where` stays quiet. | `scanner_engine/js_scanner.py` |
+| 4 | JS019 (CRITICAL): `algorithms: [... 'none' ...]`, a JWT check that accepts unsigned tokens. | `scanner_engine/js_scanner.py` |
+| 5 | PHP013 (CRITICAL): `unserialize()` of `$_COOKIE`, `$_GET`, `$_POST` or `$_REQUEST` (also inside `base64_decode`). | `scanner_engine/php_scanner.py`, `scanner_engine/categories.py` |
+| 6 | Log Sentinel: Shellshock (`() { :; };` and the `>_[...]` variant) in the User-Agent, the Referer or the request is a command injection (LS105). Struts/OGNL `${#...}`, `%{...}`, `#_memberAccess`, `@ognl.OgnlContext` in path or query are template/expression injection (LS107). Both kept in the existing rules, so no new texts were needed. | `log_sentinel/rules.py` |
+
+Tests: 42 new (attacks and harmless neighbours: `pattern.exec`, `res.json(req.body)`, a constant `$where`, `algorithms: ['HS256']`, `json_decode($_COOKIE[...])`, CSS braces and printf formats in URLs). The existing false-positive corpora (Django admin URLs, "O'Brien", slugs, the benign day log) stay at zero. Type check: `uvx pyright`, 0 errors.
+
+Known limits:
+
+- The JS and PHP rules work line by line: a request value assigned to a variable first (`const dir = req.query.dir; exec('ls ' + dir)`) is found by JS016 only through the concatenation, and `res.send(html)` with `html` built on an earlier line is missed.
+- `%{...}` in a URL is reported as an expression even when an application uses it for its own templates.
+- Shellshock payloads are not added to `tests/fixtures/log_sentinel/true_positives.txt`: the antivirus quarantined that file when they were written into it. The tests build them at runtime instead.
+
 ## Log Sentinel (branch `feature/log-sentinel`)
 
 Goal: read the web server's access logs on this computer, report attacks, and link them with the file integrity monitor. Detection only: nothing is blocked and nothing from the logs is sent anywhere.
