@@ -71,6 +71,25 @@ Known limits:
 - A file the antivirus locks is read as empty by the line scanners (unchanged behaviour); only the Python engine reports it as unreadable.
 - Generated `build` folders are recognised by setuptools, PyInstaller and CMake markers only; other build output is scanned.
 
+### Phase 4: PDF report (branch `fix/pdf-report`)
+
+Problem: titles, descriptions, recommendations, file names, rule ids, confidence and CWE went into ReportLab paragraphs unescaped, so one `<` (common in OSV summaries: "XSS via <svg>", "versions < 2.0") stopped the whole report with `ValueError: paraparser: syntax error`. The snippet was escaped and then cut, which could split `&lt;`. And the report printed full secrets: AWS keys, Django `SECRET_KEY`, Bandit's "Possible hardcoded password: 'value'".
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | Every dynamic value is escaped (`_text`): company name, top-rules list, file table, title, severity, rule ids, confidence, file and line, CWE, description, snippet, recommendation. The snippet is masked, cut to 300 characters, and only then escaped. | `reports/pdf_generator.py` |
+| 2 | `SecretMasker`: for findings in the SECRET category or with B105/B106/B107, values in the title, description, snippet and recommendation are shown as first 4 + `…` + last 4 (`AKIA…MPLE`); values under 12 characters as `****`. It recognises quoted values, unquoted values of secret-like names, the password in `scheme://user:password@host`, and token shapes (AWS, GitHub, OpenAI-style, Slack, JWT). Names stay readable. | `reports/secret_masking.py` |
+| 3 | Setting "Show secret values in reports" (`report_show_secret_values`, off by default) in Settings → Reports; `PDFReportConfig.show_secret_values` overrides it. AR/DE/EN. | `gui/pages/settings_page.py`, translations |
+| 4 | Tests read the text of the generated PDF with `pypdf` (new test-only dependency in `src/requirements-dev.txt`): `<`, `&`, `>` in every field render as text; a report of `tests/corpus` and of a project with a Django `SECRET_KEY`, an AWS key and a Bandit password contains none of the full values. | `tests/test_pdf_report.py` |
+
+Tests: 1941 passing, 6 skipped (16 new). Type check: `uvx pyright`, 0 errors.
+
+Known limits:
+
+- Masking applies to secret findings only. A secret that appears in the snippet of another kind of finding (say, a connection string on the same line as an SQL query) is printed as it is.
+- The masker works on text patterns. A secret in an unusual form (no quotes, a name without a secret-like word, not a known token shape) can stay visible.
+- The PDF only: the results page in the app still shows the full snippet, as before.
+
 ## Log Sentinel (branch `feature/log-sentinel`)
 
 Goal: read the web server's access logs on this computer, report attacks, and link them with the file integrity monitor. Detection only: nothing is blocked and nothing from the logs is sent anywhere.
