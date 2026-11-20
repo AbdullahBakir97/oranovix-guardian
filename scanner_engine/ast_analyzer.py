@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import ast
 from abc import ABC, abstractmethod
-from typing import List
+from typing import FrozenSet, List, Optional
 
 from .base import Issue, Severity
 from .categories import IssueCategory
+from .secret_heuristics import SecretHeuristics
 
 # Variable names that suggest a secret. Shared with ``core.redactor``.
 SECRET_VARIABLE_NAMES: frozenset = frozenset({
@@ -28,6 +29,47 @@ SECRET_VARIABLE_NAMES: frozenset = frozenset({
     "token", "auth_token", "access_token", "private_key",
     "secret_key", "api_secret", "client_secret",
 })
+
+
+# ---------------------------------------------------------------------------
+# What the whole module tells a rule
+# ---------------------------------------------------------------------------
+
+class ModuleContext:
+    """Facts about the whole module that a single node cannot show.
+
+    ``bound`` holds every name the module binds itself: imports, function
+    and class names, parameters, assignment targets. A call to such a name
+    is not a call to the builtin of the same name (``from re import
+    compile``). ``from builtins import eval`` still means the builtin.
+    """
+
+    def __init__(self, tree: Optional[ast.AST] = None) -> None:
+        self.bound: FrozenSet[str] = self._bound_names(tree) if tree is not None else frozenset()
+
+    @staticmethod
+    def _bound_names(tree: ast.AST) -> FrozenSet[str]:
+        names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if node.module == "builtins" and alias.asname is None:
+                        continue
+                    names.add(alias.asname or alias.name)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.arg):
+                names.add(node.arg)
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                names.add(node.id)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                names.add(node.name)
+        return frozenset(names)
+
+
+EMPTY_CONTEXT = ModuleContext()
 
 
 # ---------------------------------------------------------------------------
@@ -54,44 +96,63 @@ class ASTRule(ABC):
             relevant to this rule.
         """
 
+    def check_in(self, node: ast.AST, context: ModuleContext) -> List[Issue]:
+        """Like ``check``, with facts about the whole module. Rules that need
+        them override this; the others ignore the context."""
+        return self.check(node)
+
 
 # ---------------------------------------------------------------------------
 # Concrete rule: dangerous built-in functions
 # ---------------------------------------------------------------------------
 
 class DangerousFunctionRule(ASTRule):
-    """Detects calls to eval(), exec(), and compile().
+    """Detects calls to the builtins eval(), exec() and compile().
 
-    Unlike regex scanners these calls are detected by examining actual
-    Call nodes in the AST, so occurrences inside comments, docstrings, or
-    string literals are correctly ignored.
+    Only the builtins count: a bare name the module does not bind itself,
+    or ``builtins.eval`` / ``__builtins__.eval``. Methods with the same
+    name (``re.compile``, ``model.eval()``, ``df.eval``, ``pattern.exec``)
+    and names the module imports or assigns (``from re import compile``)
+    are other functions. Unlike regex scanners, the AST also ignores the
+    words in comments, docstrings and string literals.
+
+    A call on a constant string is MEDIUM: the code is fixed in the
+    source. Anything else (a variable, an f-string, request data) is
+    CRITICAL.
     """
 
-    _DANGEROUS: set = {"eval", "exec", "compile"}
+    _DANGEROUS: FrozenSet[str] = frozenset({"eval", "exec", "compile"})
+    _BUILTIN_MODULES: FrozenSet[str] = frozenset({"builtins", "__builtins__"})
 
     def check(self, node: ast.AST) -> List[Issue]:
+        return self.check_in(node, EMPTY_CONTEXT)
+
+    def check_in(self, node: ast.AST, context: ModuleContext) -> List[Issue]:
         if not isinstance(node, ast.Call):
             return []
-
-        # Resolve the function name — handle both bare names and attribute access
-        func_name: str | None = None
-        if isinstance(node.func, ast.Name):
-            func_name = node.func.id
-        elif isinstance(node.func, ast.Attribute):
-            func_name = node.func.attr
-
-        if func_name is None or func_name not in self._DANGEROUS:
+        func_name = self._builtin_name(node.func, context)
+        if func_name is None:
             return []
 
-        return [Issue(
-            rule_id=f"AST-{func_name.upper()[:3]}",
-            title=f"Dangerous Function Call: {func_name}()",
-            description=(
+        constant = self.constant_source(node)
+        severity = Severity.MEDIUM if constant else Severity.CRITICAL
+        if constant:
+            description = (
+                f"{func_name}() runs code given as a constant string. The code is fixed in "
+                "the source, so an attacker cannot change it, but the call is hard to review "
+                "and easy to turn into a vulnerability later."
+            )
+        else:
+            description = (
                 f"{func_name}() executes arbitrary Python code at runtime. "
                 "If the argument is derived from user input, an attacker can "
                 "execute arbitrary Python and gain full system access."
-            ),
-            severity=Severity.CRITICAL,
+            )
+        return [Issue(
+            rule_id=f"AST-{func_name.upper()[:3]}",
+            title=f"Dangerous Function Call: {func_name}()",
+            description=description,
+            severity=severity,
             file_path="",        # populated by ASTAnalyzer.analyze()
             line_number=getattr(node, "lineno", 0),
             code_snippet="",
@@ -104,6 +165,28 @@ class DangerousFunctionRule(ASTRule):
             category=IssueCategory.CODE_EXEC,
             confidence="HIGH",
         )]
+
+    def _builtin_name(self, func: ast.expr, context: ModuleContext) -> Optional[str]:
+        if isinstance(func, ast.Name):
+            if func.id in self._DANGEROUS and func.id not in context.bound:
+                return func.id
+            return None
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in self._DANGEROUS
+            and isinstance(func.value, ast.Name)
+            and func.value.id in self._BUILTIN_MODULES
+        ):
+            return func.attr
+        return None
+
+    @staticmethod
+    def constant_source(call: ast.Call) -> bool:
+        """``True`` when the code argument is a string (or bytes) literal."""
+        source: Optional[ast.expr] = call.args[0] if call.args else None
+        if source is None:
+            source = next((k.value for k in call.keywords if k.arg in ("source", "expression")), None)
+        return isinstance(source, ast.Constant) and isinstance(source.value, (str, bytes))
 
 
 # ---------------------------------------------------------------------------
@@ -171,9 +254,9 @@ class SQLInjectionRule(ASTRule):
 class HardcodedSecretsRule(ASTRule):
     """Detects variable assignments where the name suggests a secret.
 
-    Only flags assignments where the RHS is a non-empty string constant
-    of at least 4 characters, avoiding false positives from placeholder
-    values like password = "" or token = None.
+    Only flags assignments where the RHS is a string constant that looks
+    like a real secret (``SecretHeuristics``): placeholders such as
+    ``token = "test"``, short values, URLs and paths are skipped.
     """
 
     _SECRET_NAMES: frozenset = SECRET_VARIABLE_NAMES
@@ -195,7 +278,7 @@ class HardcodedSecretsRule(ASTRule):
             value = node.value
             if not isinstance(value, ast.Constant):
                 continue
-            if not isinstance(value.value, str) or len(value.value) < 4:
+            if not isinstance(value.value, str) or not SecretHeuristics.is_secret(var_name, value.value):
                 continue
 
             return [Issue(
@@ -297,6 +380,12 @@ class WeakCryptoRule(ASTRule):
         if not (isinstance(node.func.value, ast.Name)
                 and node.func.value.id == "hashlib"):
             return []
+        # hashlib.md5(data, usedforsecurity=False): a checksum, not security.
+        if any(
+            k.arg == "usedforsecurity" and isinstance(k.value, ast.Constant) and k.value.value is False
+            for k in node.keywords
+        ):
+            return []
 
         algo = node.func.attr
         return [Issue(
@@ -367,10 +456,11 @@ class ASTAnalyzer:
 
         lines = code.splitlines()
         issues: List[Issue] = []
+        context = ModuleContext(tree)
 
         for node in ast.walk(tree):
             for rule in cls._RULES:
-                found = rule.check(node)
+                found = rule.check_in(node, context)
                 for issue in found:
                     # Patch file_path and code_snippet which the rules leave blank
                     issue.file_path = file_path
