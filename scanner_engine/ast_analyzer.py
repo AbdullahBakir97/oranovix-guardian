@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import ast
 from abc import ABC, abstractmethod
-from typing import FrozenSet, List, Optional
+from typing import Dict, FrozenSet, List, Optional
 
 from .base import Issue, Severity
 from .categories import IssueCategory
@@ -46,6 +46,36 @@ class ModuleContext:
 
     def __init__(self, tree: Optional[ast.AST] = None) -> None:
         self.bound: FrozenSet[str] = self._bound_names(tree) if tree is not None else frozenset()
+        #: Names that hold the builtins module: ``builtins``, ``__builtins__``,
+        #: and ``b`` after ``import builtins as b``.
+        self.builtin_modules: FrozenSet[str] = BUILTIN_MODULE_NAMES
+        #: Names that hold eval/exec/compile: ``e = eval``,
+        #: ``fn = getattr(__builtins__, "exec")``, ``from builtins import eval as ev``.
+        self.aliases: Dict[str, str] = {}
+        if tree is not None:
+            self._find_aliases(tree)
+
+    def _find_aliases(self, tree: ast.AST) -> None:
+        modules = set(BUILTIN_MODULE_NAMES)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "builtins" and alias.asname:
+                        modules.add(alias.asname)
+            elif isinstance(node, ast.ImportFrom) and node.module == "builtins":
+                for alias in node.names:
+                    if alias.name in DANGEROUS_BUILTINS and alias.asname:
+                        self.aliases[alias.asname] = alias.name
+        self.builtin_modules = frozenset(modules)
+        assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
+        for _ in range(3):              # e = eval; f = e: both are eval
+            for node in assignments:
+                name = dangerous_reference(node.value, self)
+                if name is None:
+                    continue
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.aliases[target.id] = name
 
     @staticmethod
     def _bound_names(tree: ast.AST) -> FrozenSet[str]:
@@ -67,6 +97,71 @@ class ModuleContext:
             elif isinstance(node, ast.ExceptHandler) and node.name:
                 names.add(node.name)
         return frozenset(names)
+
+
+DANGEROUS_BUILTINS: FrozenSet[str] = frozenset({"eval", "exec", "compile"})
+BUILTIN_MODULE_NAMES: FrozenSet[str] = frozenset({"builtins", "__builtins__"})
+_NAMESPACE_CALLS: FrozenSet[str] = frozenset({"globals", "vars", "locals"})
+
+
+def _constant_text(node: Optional[ast.AST]) -> Optional[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def is_builtins_module(expr: ast.AST, context: "ModuleContext") -> bool:
+    """``builtins``, an alias of it, ``globals()["__builtins__"]`` or ``__import__("builtins")``."""
+    if isinstance(expr, ast.Name):
+        return expr.id in context.builtin_modules
+    if isinstance(expr, ast.Subscript):
+        holder = expr.value
+        return (
+            _constant_text(expr.slice) == "__builtins__"
+            and isinstance(holder, ast.Call)
+            and isinstance(holder.func, ast.Name)
+            and holder.func.id in _NAMESPACE_CALLS
+        )
+    if isinstance(expr, ast.Call) and expr.args:
+        func = expr.func
+        importer = (
+            (isinstance(func, ast.Name) and func.id == "__import__")
+            or (isinstance(func, ast.Attribute) and func.attr == "import_module")
+        )
+        return importer and _constant_text(expr.args[0]) == "builtins"
+    return False
+
+
+def builtin_lookup(expr: ast.AST, context: "ModuleContext") -> Optional[str]:
+    """eval/exec/compile taken from the builtins module, however it is spelled."""
+    if isinstance(expr, ast.Attribute) and expr.attr in DANGEROUS_BUILTINS:
+        return expr.attr if is_builtins_module(expr.value, context) else None
+    if isinstance(expr, ast.Subscript):
+        key = _constant_text(expr.slice)
+        if key in DANGEROUS_BUILTINS and is_builtins_module(expr.value, context):
+            return key
+        return None
+    if (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        and expr.func.id == "getattr"
+        and len(expr.args) >= 2
+    ):
+        key = _constant_text(expr.args[1])
+        if key in DANGEROUS_BUILTINS and is_builtins_module(expr.args[0], context):
+            return key
+    return None
+
+
+def dangerous_reference(expr: ast.AST, context: "ModuleContext") -> Optional[str]:
+    """The builtin eval/exec/compile that *expr* stands for, or ``None``."""
+    if isinstance(expr, ast.Name):
+        if expr.id in context.aliases:
+            return context.aliases[expr.id]
+        if expr.id in DANGEROUS_BUILTINS and expr.id not in context.bound:
+            return expr.id
+        return None
+    return builtin_lookup(expr, context)
 
 
 EMPTY_CONTEXT = ModuleContext()
@@ -121,20 +216,28 @@ class DangerousFunctionRule(ASTRule):
     CRITICAL.
     """
 
-    _DANGEROUS: FrozenSet[str] = frozenset({"eval", "exec", "compile"})
-    _BUILTIN_MODULES: FrozenSet[str] = frozenset({"builtins", "__builtins__"})
+    _DANGEROUS: FrozenSet[str] = DANGEROUS_BUILTINS
+    _BUILTIN_MODULES: FrozenSet[str] = BUILTIN_MODULE_NAMES
 
     def check(self, node: ast.AST) -> List[Issue]:
         return self.check_in(node, EMPTY_CONTEXT)
 
     def check_in(self, node: ast.AST, context: ModuleContext) -> List[Issue]:
+        if isinstance(node, ast.Assign):
+            # fn = getattr(__builtins__, "exec"): hiding the builtin behind a
+            # lookup is itself the finding, wherever fn is called later.
+            hidden = builtin_lookup(node.value, context)
+            if hidden is None or isinstance(node.value, ast.Attribute):
+                return []
+            return [self._issue(hidden, node, constant=False)]
         if not isinstance(node, ast.Call):
             return []
         func_name = self._builtin_name(node.func, context)
         if func_name is None:
             return []
+        return [self._issue(func_name, node, self.constant_source(node))]
 
-        constant = self.constant_source(node)
+    def _issue(self, func_name: str, node: ast.AST, constant: bool) -> Issue:
         severity = Severity.MEDIUM if constant else Severity.CRITICAL
         if constant:
             description = (
@@ -148,7 +251,7 @@ class DangerousFunctionRule(ASTRule):
                 "If the argument is derived from user input, an attacker can "
                 "execute arbitrary Python and gain full system access."
             )
-        return [Issue(
+        return Issue(
             rule_id=f"AST-{func_name.upper()[:3]}",
             title=f"Dangerous Function Call: {func_name}()",
             description=description,
@@ -164,21 +267,12 @@ class DangerousFunctionRule(ASTRule):
             cwe="https://cwe.mitre.org/data/definitions/78.html",
             category=IssueCategory.CODE_EXEC,
             confidence="HIGH",
-        )]
+        )
 
-    def _builtin_name(self, func: ast.expr, context: ModuleContext) -> Optional[str]:
-        if isinstance(func, ast.Name):
-            if func.id in self._DANGEROUS and func.id not in context.bound:
-                return func.id
-            return None
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr in self._DANGEROUS
-            and isinstance(func.value, ast.Name)
-            and func.value.id in self._BUILTIN_MODULES
-        ):
-            return func.attr
-        return None
+    @staticmethod
+    def _builtin_name(func: ast.expr, context: ModuleContext) -> Optional[str]:
+        """The builtin a call goes to: by name, by alias, or looked up on builtins."""
+        return dangerous_reference(func, context)
 
     @staticmethod
     def constant_source(call: ast.Call) -> bool:
