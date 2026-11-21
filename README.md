@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon.png" alt="Oranovix Guardian Logo" width="120"/>
+  <img src="assets/icon_square.png" alt="Oranovix Guardian Logo" width="120"/>
 </p>
 
 <h1 align="center">Oranovix Guardian</h1>
@@ -83,6 +83,16 @@ powershell -ExecutionPolicy Bypass -File build_tools\build.ps1
 ```
 
 The script runs PyInstaller with every flag the build needs (`--collect-all bandit --collect-all stevedore --copy-metadata bandit --hidden-import keyring.backends.Windows --hidden-import truststore --collect-data certifi`, plus the bundled assets, translations and default rules) and then Inno Setup 6. Results: `dist\Oranovix Guardian.exe` and `dist\Oranovix_Guardian_Setup_v1.1.0.exe`. Use `-NoInstaller` to build only the exe.
+
+### App icon
+
+`assets/icon.png` is the untouched source logo. After changing it, regenerate the icon files and rebuild:
+
+```powershell
+python assets/icon_generator.py
+```
+
+This writes `assets/icon_square.png` (the logo tile on a transparent square, used by the UI and the large icon sizes), `assets/icon_shield.png` (the shield only, for the small sizes) and `assets/icon.ico` (16, 20, 24, 32, 48, 64, 128 and 256 px). Commit all three. After reinstalling, Windows may still show the old icon from its icon cache: run `ie4uinit.exe -show`, or sign out and in again.
 
 ---
 

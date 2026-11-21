@@ -1,38 +1,31 @@
 """
-CustomTitleBar — Replaces the OS title bar when overrideredirect=True.
-Bug fixes:
-  - Minimize uses ctypes SW_MINIMIZE (works with overrideredirect)
-  - Maximize checks actual window state
-  - App icon loaded from assets/icon.png (16x16)
+CustomTitleBar — the in-window header: logo, app name, language menu and
+theme toggle.
+
+The window itself keeps the native Windows frame, so minimize, maximize,
+close, moving, snapping and resizing are the system's own.
 """
 from __future__ import annotations
 
-import os
-import sys
 from typing import Callable, Optional
 
 import customtkinter as ctk
 
 from gui.theme_manager import ThemeManager
 from core.language_manager import LanguageManager
-from gui.asset_helper import get_asset_path
+from gui.asset_helper import load_logo
 
 
 def _load_icon_image(size: int = 16) -> Optional[ctk.CTkImage]:
-    """Load assets/icon.png and return a CTkImage, or None on failure."""
-    try:
-        from PIL import Image
-        ico = get_asset_path("icon.png")
-        if os.path.exists(ico):
-            img = Image.open(ico).convert("RGBA").resize((size, size))
-            return ctk.CTkImage(img, size=(size, size))
-    except Exception:
-        pass
-    return None
+    """The app logo at ``size`` px (longer side, aspect ratio kept), or None."""
+    img = load_logo(size)
+    if img is None:
+        return None
+    return ctk.CTkImage(img, size=img.size)
 
 
 class CustomTitleBar(ctk.CTkFrame):
-    """Red/Black custom title bar with drag-to-move."""
+    """Header strip under the native title bar."""
 
     HEIGHT = 38
 
@@ -52,12 +45,9 @@ class CustomTitleBar(ctk.CTkFrame):
         self._window    = window
         self._on_theme  = on_theme_toggle
         self._on_lang   = on_lang_change
-        self._drag_x    = 0
-        self._drag_y    = 0
 
         self.pack_propagate(False)
         self._build()
-        self._bind_drag()
 
     # ------------------------------------------------------------------
     # Build
@@ -94,7 +84,7 @@ class CustomTitleBar(ctk.CTkFrame):
 
         # ── Right: controls ───────────────────────────────────────────
         right = ctk.CTkFrame(self, fg_color="transparent")
-        right.pack(side="right")
+        right.pack(side="right", padx=(0, 6))
 
         # Language menu
         lm_var = ctk.StringVar(value=lm.current_display_name)
@@ -121,78 +111,6 @@ class CustomTitleBar(ctk.CTkFrame):
             text_color=tm.c("text"), command=self._on_theme,
         )
         self._theme_btn.pack(side="left", padx=(0, 4), pady=6)
-
-        # Divider
-        ctk.CTkFrame(
-            right, width=1, height=22, fg_color=tm.c("border")
-        ).pack(side="left", padx=4, pady=8)
-
-        # Window buttons
-        self._btn_min = self._wbtn(right, "─", tm.c("text2"), tm.c("accent"),  self._minimize)
-        self._btn_max = self._wbtn(right, "□", tm.c("text2"), tm.c("accent"),  self._maximize)
-        self._btn_cls = self._wbtn(right, "✕", "#ffffff",     tm.c("error"),   self._close)
-
-    @staticmethod
-    def _wbtn(parent, text, text_color, hover_color, command) -> ctk.CTkButton:
-        btn = ctk.CTkButton(
-            parent, text=text,
-            width=38, height=38, corner_radius=0,
-            font=ctk.CTkFont(size=11),
-            fg_color="transparent",
-            hover_color=hover_color,
-            text_color=text_color,
-            command=command,
-        )
-        btn.pack(side="left")
-        return btn
-
-    # ------------------------------------------------------------------
-    # Window actions (Bug 3 fix: ctypes minimize)
-    # ------------------------------------------------------------------
-
-    def _minimize(self) -> None:
-        """Minimize window — uses ctypes on Windows so overrideredirect works."""
-        if sys.platform == "win32":
-            try:
-                import ctypes
-                hwnd = ctypes.windll.user32.GetParent(self._window.winfo_id())
-                ctypes.windll.user32.ShowWindow(hwnd, 6)   # SW_MINIMIZE = 6
-                return
-            except Exception:
-                pass
-        self._window.iconify()
-
-    def _maximize(self) -> None:
-        if self._window.state() == "zoomed":
-            self._window.state("normal")
-            self._btn_max.configure(text="□")
-        else:
-            self._window.state("zoomed")
-            self._btn_max.configure(text="❐")
-
-    def _close(self) -> None:
-        self._window.destroy()
-
-    # ------------------------------------------------------------------
-    # Drag to move
-    # ------------------------------------------------------------------
-
-    def _bind_drag(self) -> None:
-        self.bind("<ButtonPress-1>",  self._on_press)
-        self.bind("<B1-Motion>",      self._on_drag)
-        self._title_lbl.bind("<ButtonPress-1>", self._on_press)
-        self._title_lbl.bind("<B1-Motion>",     self._on_drag)
-
-    def _on_press(self, event) -> None:
-        self._drag_x = event.x_root - self._window.winfo_x()
-        self._drag_y = event.y_root - self._window.winfo_y()
-
-    def _on_drag(self, event) -> None:
-        if self._window.state() == "zoomed":
-            return
-        self._window.geometry(
-            f"+{event.x_root - self._drag_x}+{event.y_root - self._drag_y}"
-        )
 
     # ------------------------------------------------------------------
     # Theme refresh

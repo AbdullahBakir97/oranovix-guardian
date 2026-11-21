@@ -1,11 +1,10 @@
 """
 SplashScreen — 3-second animated startup.
-Bug 4 fix: loads assets/icon.png as the logo (120x120) with glow ring.
+Shows assets/icon_square.png as the logo (no background box).
 Falls back to canvas shield if PIL/image not available.
 """
 from __future__ import annotations
 
-import os
 import sys
 import tkinter as tk
 from typing import Callable
@@ -13,7 +12,7 @@ from typing import Callable
 import customtkinter as ctk
 
 from gui.animation_manager import AnimationManager
-from gui.asset_helper      import get_asset_path
+from gui.asset_helper      import load_logo
 
 
 class SplashScreen(ctk.CTkToplevel):
@@ -50,14 +49,11 @@ class SplashScreen(ctk.CTkToplevel):
         self._logo_frame = ctk.CTkFrame(self, fg_color="transparent")
         self._logo_frame.pack(pady=(30, 0))
 
-        icon_path = get_asset_path("icon.png")
-        loaded    = False
+        pil_img = load_logo(150)
+        loaded  = False
 
-        if os.path.exists(icon_path):
+        if pil_img is not None:
             try:
-                from PIL import Image
-                pil_img = Image.open(icon_path)
-                pil_img.thumbnail((150, 150), Image.Resampling.LANCZOS)
                 self.logo_image = ctk.CTkImage(
                     light_image=pil_img,
                     dark_image=pil_img,

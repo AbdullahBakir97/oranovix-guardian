@@ -1,152 +1,167 @@
 """
 Icon generator for Oranovix Guardian.
-- If assets/icon.png exists, converts it to icon.ico (multi-size).
-- Otherwise generates a red/black shield icon programmatically.
-Run: python assets/icon_generator.py
+
+Source: ``assets/icon.png`` (1536x1024, the logo tile centred on a white
+background). It is never changed. From it this script writes:
+
+- ``assets/icon_square.png``: the tile with the white background removed,
+  cropped and padded to a transparent square. Used by the UI and for the
+  large icon sizes.
+- ``assets/icon_shield.png``: the shield part only, with rounded corners.
+  Used for the small icon sizes, where the text would be noise.
+- ``assets/icon.ico``: 16, 20, 24, 32, 48, 64, 128 and 256 px, each a
+  square 32-bit PNG entry.
+
+Run from the project root: ``python assets/icon_generator.py``
 """
 from __future__ import annotations
 
-import os
+import io
+import struct
+from collections import deque
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, List
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter
 
 ASSETS_DIR = Path(__file__).parent
+SOURCE = ASSETS_DIR / "icon.png"
+SQUARE = ASSETS_DIR / "icon_square.png"
+SHIELD = ASSETS_DIR / "icon_shield.png"
+ICO = ASSETS_DIR / "icon.ico"
+
+LARGE_SIZES = (256, 128, 64)
+SMALL_SIZES = (48, 32, 24, 20, 16)
+ICO_SIZES = (16, 20, 24, 32, 48, 64, 128, 256)
+
+WHITE_THRESHOLD = 225
+ALPHA_THRESHOLD = 8                        # the source has alpha 1..3 noise around the tile
+SHIELD_BOX = (0.20, 0.02, 0.80, 0.66)     # fractions of the square side
+CORNER_RADIUS = 0.18                       # fraction of the side
 
 
-def convert_png_to_ico() -> bool:
+def _pad_to_square(img: Image.Image) -> Image.Image:
+    side = max(img.size)
+    square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    square.paste(img, ((side - img.width) // 2, (side - img.height) // 2))
+    return square
+
+
+def remove_outside_background(img: Image.Image) -> Image.Image:
+    """Make the near-white or (nearly) transparent area connected to the border transparent.
+
+    White highlights inside the logo are kept: only background reachable
+    from the image border counts as outside.
     """
-    Convert assets/icon.png -> assets/icon.ico with all standard sizes.
-    Writes the ICO manually via struct to work around Pillow's broken
-    append_images ICO support.
-    """
-    import io, struct
-    png_path = ASSETS_DIR / "icon.png"
-    ico_path = ASSETS_DIR / "icon.ico"
-    if not png_path.exists():
-        return False
-    try:
-        base   = Image.open(str(png_path)).convert("RGBA")
-        sizes  = [16, 32, 48, 64, 128, 256]
+    img = img.convert("RGBA")
+    width, height = img.size
+    pixels = img.load()
 
-        # Render each size to in-memory PNG bytes
-        blobs: list[bytes] = []
-        for s in sizes:
-            buf = io.BytesIO()
-            base.resize((s, s), Image.Resampling.LANCZOS).save(buf, format="PNG")
-            blobs.append(buf.getvalue())
+    def is_background(x: int, y: int) -> bool:
+        r, g, b, a = pixels[x, y]
+        return a < ALPHA_THRESHOLD or (r > WHITE_THRESHOLD and g > WHITE_THRESHOLD and b > WHITE_THRESHOLD)
 
-        # Build ICO: header + directory + image data
-        count  = len(sizes)
-        out    = io.BytesIO()
-        out.write(struct.pack("<HHH", 0, 1, count))   # ICO header
-        offset = 6 + count * 16
-        for s, blob in zip(sizes, blobs):
-            w = 0 if s == 256 else s   # 0 == 256 per ICO spec
-            h = 0 if s == 256 else s
-            out.write(struct.pack("<BBBBHHII", w, h, 0, 0, 1, 32, len(blob), offset))
-            offset += len(blob)
-        for blob in blobs:
-            out.write(blob)
+    outside = bytearray(width * height)
+    queue: deque = deque()
+    for x in range(width):
+        queue.append((x, 0))
+        queue.append((x, height - 1))
+    for y in range(height):
+        queue.append((0, y))
+        queue.append((width - 1, y))
+    while queue:
+        x, y = queue.popleft()
+        index = y * width + x
+        if outside[index] or not is_background(x, y):
+            continue
+        outside[index] = 1
+        if x > 0:
+            queue.append((x - 1, y))
+        if x < width - 1:
+            queue.append((x + 1, y))
+        if y > 0:
+            queue.append((x, y - 1))
+        if y < height - 1:
+            queue.append((x, y + 1))
 
-        ico_path.write_bytes(out.getvalue())
-        print(f"Converted {png_path.name} -> {ico_path.name} "
-              f"({ico_path.stat().st_size:,} bytes, {count} sizes)")
-        return True
-    except Exception as exc:
-        print(f"PNG->ICO conversion failed: {exc}")
-        return False
-
-
-def _draw_shield(size: int = 256) -> Image.Image:
-    """Red/black shield with 'OG' text."""
-    ACCENT = (204, 0, 0, 255)
-    DARK   = (20, 0, 0, 255)
-    WHITE  = (255, 255, 255, 255)
-
-    img  = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-    m  = size * 0.08
-    cx = size / 2
-
-    # Outer shield
-    pts = [
-        (m,         m * 1.5),
-        (size - m,  m * 1.5),
-        (size - m,  size * 0.60),
-        (cx,        size - m),
-        (m,         size * 0.60),
-    ]
-    draw.polygon(pts, fill=ACCENT)
-
-    # Inner shield (darker inset for depth)
-    pad = size * 0.10
-    inner = [
-        (m + pad,       m * 1.5 + pad),
-        (size - m - pad, m * 1.5 + pad),
-        (size - m - pad, size * 0.58),
-        (cx,             size - m - pad),
-        (m + pad,        size * 0.58),
-    ]
-    draw.polygon(inner, fill=DARK)
-
-    # "OG" text
-    font_size = int(size * 0.30)
-    font = None
-    for name in ("C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/arial.ttf"):
-        if os.path.exists(name):
-            try:
-                font = ImageFont.truetype(name, font_size)
-                break
-            except Exception:
-                pass
-    if font is None:
-        font = ImageFont.load_default()
-
-    label = "OG"
-    bbox  = draw.textbbox((0, 0), label, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    tx = cx - tw / 2
-    ty = size * 0.35 - th / 2
-
-    draw.text((tx + 2, ty + 2), label, font=font, fill=(0, 0, 0, 140))
-    draw.text((tx,     ty),     label, font=font, fill=WHITE)
-    return img
+    result = img.copy()
+    out = result.load()
+    for y in range(height):
+        row = y * width
+        for x in range(width):
+            if outside[row + x]:
+                out[x, y] = (0, 0, 0, 0)
+    return result
 
 
-def create_icon_image(size: int = 256) -> Image.Image:
-    """Return a PIL Image of the app icon at the given size."""
-    return _draw_shield(size=size)
+def make_square(source: Image.Image) -> Image.Image:
+    """The logo tile alone, centred on a transparent square."""
+    cleared = remove_outside_background(source)
+    bbox = cleared.getchannel("A").getbbox()
+    if bbox is None:
+        raise ValueError("the source image is all background")
+    return _pad_to_square(cleared.crop(bbox))
 
 
-def create_app_icon(output_dir: str | None = None) -> str:
-    """
-    Generate Oranovix Guardian icon.ico with multiple sizes.
-    Returns the absolute path to the written file.
-    """
-    if output_dir is None:
-        output_dir = str(ASSETS_DIR)
-
-    os.makedirs(output_dir, exist_ok=True)
-    ico_path = os.path.join(output_dir, "icon.ico")
-
-    sizes  = [256, 128, 64, 48, 32, 16]
-    images = [_draw_shield(s) for s in sizes]
-    images[0].save(
-        ico_path,
-        format="ICO",
-        sizes=[(s, s) for s in sizes],
-        append_images=images[1:],
+def make_shield(square: Image.Image) -> Image.Image:
+    """The shield region of the square, padded to square, with rounded corners."""
+    side = square.width
+    left, top, right, bottom = (round(f * side) for f in SHIELD_BOX)
+    shield = _pad_to_square(square.crop((left, top, right, bottom)))
+    mask = Image.new("L", shield.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, shield.width - 1, shield.height - 1),
+        radius=round(CORNER_RADIUS * shield.width), fill=255,
     )
-    return ico_path
+    alpha = Image.composite(shield.getchannel("A"), mask, mask)
+    shield.putalpha(alpha)
+    return shield
+
+
+def render_sizes(square: Image.Image, shield: Image.Image) -> Dict[int, Image.Image]:
+    images: Dict[int, Image.Image] = {}
+    for size in LARGE_SIZES:
+        images[size] = square.resize((size, size), Image.Resampling.LANCZOS)
+    for size in SMALL_SIZES:
+        small = shield.resize((size, size), Image.Resampling.LANCZOS)
+        images[size] = small.filter(ImageFilter.UnsharpMask(radius=1, percent=80, threshold=2))
+    return images
+
+
+def write_ico(images: Dict[int, Image.Image], path: Path) -> None:
+    """Write a .ico of PNG entries by hand (Pillow re-scales one source image)."""
+    sizes: List[int] = list(ICO_SIZES)
+    blobs: List[bytes] = []
+    for size in sizes:
+        img = images[size]
+        assert img.size == (size, size)
+        buf = io.BytesIO()
+        img.convert("RGBA").save(buf, format="PNG")
+        blobs.append(buf.getvalue())
+
+    out = io.BytesIO()
+    out.write(struct.pack("<HHH", 0, 1, len(sizes)))
+    offset = 6 + 16 * len(sizes)
+    for size, blob in zip(sizes, blobs):
+        dim = 0 if size == 256 else size          # 0 means 256 in the ICO directory
+        out.write(struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(blob), offset))
+        offset += len(blob)
+    for blob in blobs:
+        out.write(blob)
+    path.write_bytes(out.getvalue())
+
+
+def build_icons() -> None:
+    source = Image.open(SOURCE)
+    square = make_square(source)
+    shield = make_shield(square)
+    square.save(SQUARE, optimize=True)
+    shield.save(SHIELD, optimize=True)
+    write_ico(render_sizes(square, shield), ICO)
+    print(f"{SQUARE.name}: {square.width}x{square.height}")
+    print(f"{SHIELD.name}: {shield.width}x{shield.height}")
+    print(f"{ICO.name}: {', '.join(str(s) for s in ICO_SIZES)} px ({ICO.stat().st_size:,} bytes)")
 
 
 if __name__ == "__main__":
-    print("Oranovix Guardian — Icon setup")
-    if not convert_png_to_ico():
-        print("assets/icon.png not found — generating shield icon...")
-        path = create_app_icon()
-        print(f"Generated: {path}")
-    print("Done.")
+    build_icons()

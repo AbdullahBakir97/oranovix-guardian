@@ -35,7 +35,7 @@ import customtkinter as ctk
 
 from gui.theme_manager      import ThemeManager
 from gui.animation_manager  import AnimationManager
-from gui.asset_helper       import get_asset_path
+from gui.asset_helper       import load_logo
 from core.language_manager  import LanguageManager
 from core.sound_manager     import SoundManager
 from core.alarm_center      import AlarmCenter, AlarmLevel
@@ -100,11 +100,9 @@ class LogConsole(ctk.CTkFrame):
         # Attempt to show a small app icon in the header; silently skip if
         # Pillow is unavailable or the asset file is missing.
         try:
-            from PIL import Image
-            ico = get_asset_path("icon.png")
-            if os.path.exists(ico):
-                img = Image.open(ico).convert("RGBA").resize((16, 16))
-                ctk_img = ctk.CTkImage(img, size=(16, 16))
+            img = load_logo(16)
+            if img is not None:
+                ctk_img = ctk.CTkImage(img, size=img.size)
                 ctk.CTkLabel(
                     hdr, image=ctk_img, text="",
                     fg_color="transparent", width=20,

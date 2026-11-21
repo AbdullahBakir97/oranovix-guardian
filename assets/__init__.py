@@ -1,3 +1,3 @@
-from .icon_generator import create_app_icon, create_icon_image
+from .icon_generator import build_icons
 
-__all__ = ["create_app_icon", "create_icon_image"]
+__all__ = ["build_icons"]
