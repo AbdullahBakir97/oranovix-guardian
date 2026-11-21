@@ -38,7 +38,8 @@ BASIC_VALUE = base64.b64encode(f"admin:{PLAIN_PASSWORD}".encode()).decode()
 
 
 def pem_line(edge: str, kind: str) -> str:
-    return f"{PEM_DASHES}{edge} {kind} PRIVATE KEY{PEM_DASHES}"
+    label = f"{kind} PRIVATE KEY" if kind else "PRIVATE KEY"
+    return f"{PEM_DASHES}{edge} {label}{PEM_DASHES}"
 CONNECTION = "postgresql://admin:Pa55word@host"
 FULL_PATH = r"C:\Users\someone\projects\shop\billing\views.py"
 
@@ -226,6 +227,13 @@ def test_every_detector_pattern_is_covered() -> None:
         "SEC-CONN1": "mysql://root:hunter2hunter2@db",
         "SEC-PRVK1": f"{pem_line('BEGIN', 'EC')}\nhunter2hunter2\n{pem_line('END', 'EC')}",
         "SEC-JWT01": JWT_HEAD + ".hunter2hunter2",
+        "SEC-GCP01": '"private_key": "' + pem_line("BEGIN", "") + r"\nhunter2hunter2\n" + pem_line("END", "") + '"',
+        "SEC-STRP1": "sk" + "_live_" + "hunter2hunter2" + "a1B2a1B2Z9y8Z9y8",
+        "SEC-SLCK1": "xo" + "xb-" + "1234567890-" + "hunter2hunter2",
+        "SEC-GAPI1": "AI" + "za" + "hunter2hunter2" + "a1B2a1B2Z9y8Z9y8" + "abcde",
+        "SEC-SGRD1": "S" + "G." + "hunter2hunter2a1B2a1B2" + "." + "hunter2hunter2" + "Z9y8Z9y8" * 3 + "abcde",
+        "SEC-TGBT1": "123456789:" + "AA" + "hunter2hunter2" + "a1B2a1B2Z9y8Z9y8" + "abc",
+        "SEC-CFG01": "DB_PASSWORD=hunter2hunter2",
     }
     assert {p.rule_id for p in SecretsDetector.patterns()} == set(samples)
 
@@ -697,3 +705,33 @@ def test_analyzer_error_has_no_key_and_no_url(consent_given: None) -> None:
     assert analyzer.analyze(make_result()) is None
     assert API_KEY not in analyzer.last_error
     assert "https://" not in analyzer.last_error
+
+
+# ---------------------------------------------------------------------------
+# A new secret type gets the same protection as the old ones
+# ---------------------------------------------------------------------------
+
+def test_a_new_secret_type_is_masked_in_the_pdf_and_never_sent(
+    http: FakeHttp, consent_given: None, tmp_path: Path
+) -> None:
+    pypdf = pytest.importorskip("pypdf")
+    from reports.pdf_generator import PDFReportConfig, PDFReportGenerator
+
+    stripe_key = "sk" + "_live_" + "51Hx9QaZz8vTq2Lm7Yp4Rw1N"
+    project = tmp_path / "shop"
+    project.mkdir()
+    (project / ".env").write_text(f"STRIPE_KEY={stripe_key}" + chr(10), encoding="utf-8")
+    result = SecretsDetector().scan(str(project))
+    (issue,) = [i for i in result.issues if i.rule_id == "SEC-STRP1"]
+    assert issue.category is IssueCategory.SECRET
+
+    suggestion = AIFixGenerator(api_key=API_KEY).generate_fix(issue)
+    assert http.requests == []
+    assert suggestion.source == "offline"
+
+    path = PDFReportGenerator(PDFReportConfig(show_secret_values=False)).generate(
+        result, str(tmp_path / "report.pdf"))
+    text = "".join(page.extract_text() or "" for page in pypdf.PdfReader(path).pages)
+    assert "STRIPE_KEY" in text
+    assert stripe_key not in text
+    assert stripe_key[8:20] not in text

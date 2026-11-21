@@ -158,6 +158,8 @@ class ScanOrchestrator:
             result.issues.extend(BaseScanner.isolated(
                 result, file_path, lambda p=file_path, lang=language: engine.scan_file(p, lang), "rule engine"
             ))
+        for message in getattr(engine, "warnings", []):
+            self._warn(result, message, ScanStage.RULES, 0.85)
 
     def _run_dependency_scanner(self, target: str, result: ScanResult) -> None:
         scanner = self._dependency_scanner

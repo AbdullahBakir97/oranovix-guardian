@@ -12,7 +12,7 @@ import re
 import struct
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, cast
 
 import pytest
 from PIL import Image
@@ -35,6 +35,10 @@ def _ico_entries(path: Path) -> List[Tuple[int, int, bytes]]:
         assert bpp == 32
         entries.append((w or 256, h or 256, data[offset:offset + size]))
     return entries
+
+
+def _rgba(img: Image.Image, xy: Tuple[int, int]) -> Tuple[int, int, int, int]:
+    return cast(Tuple[int, int, int, int], img.getpixel(xy))
 
 
 def _ico_images() -> Dict[int, Image.Image]:
@@ -98,7 +102,7 @@ def app() -> Any:
             window = app_module.CodeGuardianApp(instance=instance)
         except Exception as exc:  # no display
             pytest.skip(f"no display: {exc}")
-        window._test_instance = instance
+        setattr(window, "_test_instance", instance)
         yield window
         try:
             window.destroy()
@@ -239,7 +243,10 @@ def test_ico_has_exactly_the_eight_square_sizes() -> None:
 
 def test_the_256_entry_is_not_squashed() -> None:
     img = _ico_images()[256]
-    left, top, right, bottom = img.getchannel("A").point(lambda a: 255 if a > 16 else 0).getbbox()
+    alpha = img.getchannel("A").point([255 if a > 16 else 0 for a in range(256)])
+    bbox = alpha.getbbox()
+    assert bbox is not None
+    left, top, right, bottom = bbox
     ratio = (right - left) / (bottom - top)
     assert 0.95 <= ratio <= 1.05, ratio
 
@@ -247,7 +254,7 @@ def test_the_256_entry_is_not_squashed() -> None:
 def test_the_256_entry_has_transparent_corners() -> None:
     img = _ico_images()[256]
     for xy in ((0, 0), (255, 0), (0, 255), (255, 255)):
-        assert img.getpixel(xy)[3] == 0, xy
+        assert _rgba(img, xy)[3] == 0, xy
 
 
 def test_the_32_entry_keeps_the_green_code_sign() -> None:
@@ -255,7 +262,7 @@ def test_the_32_entry_keeps_the_green_code_sign() -> None:
     green = 0
     for x in range(6, 26):
         for y in range(6, 26):
-            r, g, _b, a = img.getpixel((x, y))
+            r, g, _b, a = _rgba(img, (x, y))
             if a > 128 and g > 150 and r < 120:
                 green += 1
     assert green >= 3, green
@@ -265,7 +272,7 @@ def test_square_asset_is_committed_and_square() -> None:
     img = Image.open(ASSETS / "icon_square.png")
     assert img.width == img.height
     assert img.mode == "RGBA"
-    assert img.getpixel((0, 0))[3] == 0
+    assert _rgba(img, (0, 0))[3] == 0
 
 
 @pytest.mark.parametrize("size", [16, 20, 26, 150])

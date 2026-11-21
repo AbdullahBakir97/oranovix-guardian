@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Pattern
+from typing import Any, Dict, Iterator, List, Optional, Pattern
 
 from core.app_paths import AppPaths, DataFile
 from core.storage_problems import StorageProblems
@@ -43,6 +43,16 @@ _FLAGS = re.MULTILINE | re.IGNORECASE
 # alternatives: (a+)+ , (\w*)* , (a|aa)*. Python's re has no time limit,
 # and such a pattern can backtrack for longer than the age of the universe.
 _UNBOUNDED_REPEAT = re.compile(r"(?:[+*]|\{\d*,\})")
+# {n}, {n,} or {n,m} after a group; group 1 is n.
+_COUNTED_REPEAT = re.compile(r"\{(\d+)(?:,\d*)?\}")
+
+#: Time one line may take for one custom rule (the ``regex`` module stops it).
+CUSTOM_RULE_TIMEOUT = 0.2
+
+try:  # optional at import time; listed in requirements and bundled with the exe
+    import regex as _regex_module
+except ImportError:  # pragma: no cover - only without the dependency
+    _regex_module = None
 
 
 class RulePatternError(ValueError):
@@ -53,6 +63,17 @@ class RulePatternError(ValueError):
 def _compiled(pattern: str) -> Pattern[str]:
     """Each pattern is compiled once for the whole process."""
     return re.compile(pattern, _FLAGS)
+
+
+@lru_cache(maxsize=1024)
+def _compiled_custom(pattern: str) -> Any:
+    """A user's pattern, compiled with ``regex`` so that a match can be stopped.
+
+    Falls back to ``re`` (no time limit) only if ``regex`` is missing.
+    """
+    if _regex_module is None:
+        return _compiled(pattern)
+    return _regex_module.compile(pattern, _regex_module.MULTILINE | _regex_module.IGNORECASE)
 
 
 def _has_nested_repeat(pattern: str) -> bool:
@@ -74,13 +95,18 @@ def _has_nested_repeat(pattern: str) -> bool:
         elif char == ")" and stack:
             groups.append((stack.pop(), index))
     for start, end in groups:
-        after = pattern[end + 1:end + 8]
-        if not _UNBOUNDED_REPEAT.match(after):
-            continue
+        after = pattern[end + 1:end + 16]
         body = _strip_classes_and_escapes(pattern[start + 1:end])
         if body.startswith("?"):
             body = body[2:] if body[1:2] in (":", "=", "!", ">") else body
-        if _UNBOUNDED_REPEAT.search(body) or "|" in body:
+        if _UNBOUNDED_REPEAT.match(after):
+            if _UNBOUNDED_REPEAT.search(body) or "|" in body:
+                return True
+            continue
+        counted = _COUNTED_REPEAT.match(after)
+        if counted and int(counted.group(1)) >= 2 and _UNBOUNDED_REPEAT.search(body):
+            # (.*a){8}X: every copy of the group can take any share of the
+            # line, so a failing match tries every way to split it.
             return True
     return False
 
@@ -114,9 +140,9 @@ def check_pattern(pattern: str) -> str:
         return f"not a valid regular expression ({exc})"
     if _has_nested_repeat(pattern):
         return (
-            "a repeated group contains another repeat or alternatives, e.g. (a+)+ or (a|aa)*; "
-            "such a pattern can take practically forever on some lines. Use a character class "
-            "or a single repeat instead, e.g. [ab]+"
+            "a repeated group contains another repeat or alternatives, e.g. (a+)+, (a|aa)* "
+            "or (.*a){8}; such a pattern can take practically forever on some lines. Use a "
+            "character class or a single repeat instead, e.g. [ab]+ or [^a]*a"
         )
     return ""
 
@@ -246,6 +272,9 @@ class RuleEngine:
         self._rules: List[Rule] = []
         #: Custom rules refused at the last load or import, as "<id>: <reason>".
         self.last_rejected: List[str] = []
+        #: One message per custom rule that was stopped for taking too long.
+        self.warnings: List[str] = []
+        self._slow_rules: Dict[str, str] = {}
         self.load_rules()
 
     # ------------------------------------------------------------------
@@ -431,21 +460,23 @@ class RuleEngine:
     #: data) are cut so that no pattern works on megabytes at once.
     MAX_LINE_LENGTH = 1000
 
-    @classmethod
-    def _apply_rule(cls, rule: Rule, code: str, file_path: str) -> List[Issue]:
-        """One Issue per match of *rule*, line by line, honouring its line exclusion."""
+    def _apply_rule(self, rule: Rule, code: str, file_path: str) -> List[Issue]:
+        """One Issue per match of *rule*, line by line, honouring its line exclusion.
+
+        A custom rule runs with a time limit per line. When a line takes
+        longer, the rule is stopped for the rest of this file and reported
+        once in ``warnings``. Built-in rules are fixed and checked by tests.
+        """
+        compile_ = _compiled if rule.is_builtin else _compiled_custom
         try:
-            compiled = _compiled(rule.pattern)
-            excluded = _compiled(rule.exclude_line_pattern) if rule.exclude_line_pattern else None
-        except re.error:
+            compiled = compile_(rule.pattern)
+            excluded = compile_(rule.exclude_line_pattern) if rule.exclude_line_pattern else None
+        except Exception:               # re.error or regex.error
             return []
 
         issues: List[Issue] = []
-        for line_num, line in enumerate(code.splitlines(), start=1):
-            text = line[: cls.MAX_LINE_LENGTH]
-            if excluded and excluded.search(text):
-                continue
-            for _match in compiled.finditer(text):
+        try:
+            for line_num, line, _match in self._matches(rule, compiled, excluded, code):
                 issues.append(Issue(
                     rule_id=rule.id,
                     title=rule.name,
@@ -458,7 +489,30 @@ class RuleEngine:
                     confidence="MEDIUM",
                     category=rule.category_enum(),
                 ))
+        except TimeoutError:
+            self._report_slow(rule, file_path)
         return issues
+
+    @classmethod
+    def _matches(cls, rule: Rule, compiled: Any, excluded: Any, code: str) -> Iterator[tuple]:
+        limit = {} if rule.is_builtin or _regex_module is None else {"timeout": CUSTOM_RULE_TIMEOUT}
+        for line_num, line in enumerate(code.splitlines(), start=1):
+            text = line[: cls.MAX_LINE_LENGTH]
+            if excluded and excluded.search(text, **limit):
+                continue
+            for match in compiled.finditer(text, **limit):
+                yield line_num, line, match
+
+    def _report_slow(self, rule: Rule, file_path: str) -> None:
+        if rule.id in self._slow_rules:
+            return
+        where = Path(file_path).name if file_path else "a file"
+        message = (
+            f"Custom rule {rule.id} was stopped: too slow on a line of {where} "
+            f"(over {CUSTOM_RULE_TIMEOUT:g} s); it was skipped for the rest of that file."
+        )
+        self._slow_rules[rule.id] = message
+        self.warnings.append(message)
 
     def scan_file(self, file_path: str, language: Language) -> List[Issue]:
         """Scan a single file with all applicable rules.

@@ -56,6 +56,35 @@ class SecretPattern(ABC):
         """Last word on a match: ``False`` drops it (e.g. a placeholder value)."""
         return True
 
+    def applies_to(self, file_name: str) -> bool:
+        """``False`` for files this pattern must not run on (default: all)."""
+        return True
+
+
+class _FixedPattern(SecretPattern):
+    """A pattern given by four class attributes."""
+
+    PATTERN: str = ""
+    SECRET_TYPE: str = ""
+    SEVERITY: Severity = Severity.CRITICAL
+    RULE_ID: str = "SEC-SCRT"
+
+    @property
+    def pattern(self) -> str:
+        return self.PATTERN
+
+    @property
+    def secret_type(self) -> str:
+        return self.SECRET_TYPE
+
+    @property
+    def severity(self) -> Severity:
+        return self.SEVERITY
+
+    @property
+    def rule_id(self) -> str:
+        return self.RULE_ID
+
 
 # ---------------------------------------------------------------------------
 # Concrete pattern classes
@@ -82,11 +111,12 @@ class AWSKeyPattern(SecretPattern):
 
 
 class OpenAIKeyPattern(SecretPattern):
-    """Detects hardcoded OpenAI API keys (sk-...)."""
+    """Detects OpenAI API keys: the old ``sk-`` + 48 format and project,
+    service-account and admin keys (``sk-proj-...``)."""
 
     @property
     def pattern(self) -> str:
-        return r'(sk-[a-zA-Z0-9]{48})'
+        return r'(sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}|sk-[a-zA-Z0-9]{48})'
 
     @property
     def secret_type(self) -> str:
@@ -102,15 +132,17 @@ class OpenAIKeyPattern(SecretPattern):
 
 
 class GitHubTokenPattern(SecretPattern):
-    """Detects hardcoded GitHub Personal Access Tokens (ghp_...)."""
+    """Detects GitHub tokens: classic (ghp_), OAuth (gho_), user-to-server
+    (ghu_), server-to-server (ghs_), refresh (ghr_) and fine-grained
+    (github_pat_)."""
 
     @property
     def pattern(self) -> str:
-        return r'(ghp_[a-zA-Z0-9]{36})'
+        return r'(gh[pousr]_[a-zA-Z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})'
 
     @property
     def secret_type(self) -> str:
-        return "GitHub Personal Access Token"
+        return "GitHub Token"
 
     @property
     def severity(self) -> Severity:
@@ -152,11 +184,25 @@ class PasswordPattern(SecretPattern):
 
 
 class ConnectionStringPattern(SecretPattern):
-    """Detects database connection strings with embedded credentials."""
+    """Detects database, cache and broker URLs with an embedded password.
+
+    ``redis://:password@host`` (no user) counts too. A password that is a
+    template (``${DB_PASSWORD}``, ``<password>``, ``%(pw)s``) is not one.
+    """
+
+    _PASSWORD = re.compile(r'://[^:\s/@]*:(?P<password>[^@\s]+)@')
+
+    def accepts(self, matched: str) -> bool:
+        found = self._PASSWORD.search(matched)
+        return found is None or not _is_template(found.group("password"))
 
     @property
     def pattern(self) -> str:
-        return r'(?:mongodb|postgresql|mysql)://[^:\s]+:[^@\s]+@'
+        return (
+            r'(?<![A-Za-z0-9+])'
+            r'(?:postgres(?:ql)?|mysql|mariadb|mssql|sqlserver|mongodb(?:\+srv)?'
+            r'|rediss?|amqps?)://[^:\s/@]*:[^@\s]+@'
+        )
 
     @property
     def secret_type(self) -> str:
@@ -171,12 +217,19 @@ class ConnectionStringPattern(SecretPattern):
         return "SEC-CONN1"
 
 
+# A real key block: the header is followed by key data (base64, or the
+# "Proc-Type:" line of an old encrypted key), after real or JSON-escaped
+# line breaks. A header alone is a constant or a comment in a crypto library.
+PEM_BODY_FOLLOWS = r'(?=(?:\\[rn]|\s)*(?:[A-Za-z0-9+/=]{12,}|Proc-Type:))'
+
+
 class PrivateKeyPattern(SecretPattern):
-    """Detects PEM-encoded RSA, EC, or DSA private key blocks."""
+    """Detects PEM private key blocks of any kind: RSA, EC, DSA, OPENSSH,
+    ENCRYPTED and plain PKCS#8, also inside a JSON string."""
 
     @property
     def pattern(self) -> str:
-        return r'-----BEGIN (?:RSA|EC|DSA) PRIVATE KEY-----'
+        return r'-----BEGIN [A-Z ]*PRIVATE KEY-----' + PEM_BODY_FOLLOWS
 
     @property
     def secret_type(self) -> str:
@@ -211,6 +264,171 @@ class JWTPattern(SecretPattern):
         return "SEC-JWT01"
 
 
+class GoogleServiceAccountPattern(_FixedPattern):
+    """A Google Cloud service account key file: ``"private_key": "-----BEGIN ..."``."""
+
+    PATTERN = r'"private_key"\s*:\s*"-----BEGIN [A-Z ]*PRIVATE KEY-----' + PEM_BODY_FOLLOWS
+    SECRET_TYPE = "Google Service Account Key"
+    RULE_ID = "SEC-GCP01"
+
+
+class StripeKeyPattern(_FixedPattern):
+    """Stripe live secret keys (``sk_live_``) and restricted keys (``rk_live_``)."""
+
+    PATTERN = r'(?<![A-Za-z0-9_])[sr]k_live_[0-9A-Za-z]{24,}'
+    SECRET_TYPE = "Stripe Live Key"
+    RULE_ID = "SEC-STRP1"
+
+
+class SlackTokenPattern(_FixedPattern):
+    """Slack bot, user, app and refresh tokens (``xoxb-``, ``xoxp-``...)."""
+
+    PATTERN = r'(?<![A-Za-z0-9_])xox[abposr]-[0-9A-Za-z-]{10,}'
+    SECRET_TYPE = "Slack Token"
+    RULE_ID = "SEC-SLCK1"
+
+
+class GoogleAPIKeyPattern(_FixedPattern):
+    """Google API keys: ``AIza`` followed by 35 characters."""
+
+    PATTERN = r'(?<![A-Za-z0-9_\-])AIza[0-9A-Za-z_\-]{35}(?![A-Za-z0-9_\-])'
+    SECRET_TYPE = "Google API Key"
+    SEVERITY = Severity.HIGH
+    RULE_ID = "SEC-GAPI1"
+
+
+class SendGridKeyPattern(_FixedPattern):
+    """SendGrid API keys: ``SG.`` + 22 + ``.`` + 43 characters."""
+
+    PATTERN = r'(?<![A-Za-z0-9_\-])SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}(?![A-Za-z0-9_\-])'
+    SECRET_TYPE = "SendGrid API Key"
+    RULE_ID = "SEC-SGRD1"
+
+
+class TelegramBotTokenPattern(_FixedPattern):
+    """Telegram bot tokens: the bot id, a colon, ``AA`` and 33 characters."""
+
+    PATTERN = r'(?<![0-9])[0-9]{8,10}:AA[0-9A-Za-z_\-]{33}(?![A-Za-z0-9_\-])'
+    SECRET_TYPE = "Telegram Bot Token"
+    RULE_ID = "SEC-TGBT1"
+
+
+# ---------------------------------------------------------------------------
+# Settings files: secret-like names with a plain value
+# ---------------------------------------------------------------------------
+
+_SECRET_NAME_WORDS = frozenset({
+    "password", "passwd", "pwd", "secret", "token", "apikey", "auth", "passphrase",
+})
+_SECRET_NAME_PAIRS = frozenset({
+    ("api", "key"), ("private", "key"), ("access", "key"), ("client", "secret"),
+    ("secret", "key"), ("auth", "token"),
+})
+_CAMEL = re.compile(r'(?<=[a-z0-9])(?=[A-Z])')
+_NAME_SPLIT = re.compile(r'[_.\-\s]+')
+_ENV_LOOKUP = re.compile(
+    r'(?:os\.environ|environ\s*[\[.(]|getenv\s*\(|\benv\s*\(|ENV\s*\[|process\.env|'
+    r'\$\{|\{\{|\{%|^\$[A-Za-z_]|vault\s*\(|!vault|secrets\.)',
+    re.IGNORECASE,
+)
+_TEMPLATE_VALUE = re.compile(
+    r'^(?:\$\{.*\}|\$[A-Za-z_]\w*|<[^<>]*>|%\([^)]*\)[sd]|\{\{.*\}\}|\{[^{}]*\}|%[A-Za-z_]\w*%)$'
+)
+_SETTINGS_EXTENSIONS = (".yml", ".yaml", ".json", ".ini", ".toml", ".properties", ".env")
+
+
+def _is_template(value: str) -> bool:
+    return bool(_TEMPLATE_VALUE.match(value.strip()))
+
+
+def is_secret_name(name: str) -> bool:
+    """``DB_PASSWORD``, ``secret_key``, ``apiKey``, ``spring.datasource.password``;
+    not ``author``, ``max_tokens`` or ``token_url``."""
+    clean = name.strip().strip("'\"")
+    if SecretHeuristics.is_non_secret_name(clean.replace("-", "_")):
+        return False
+    words = [w for w in _NAME_SPLIT.split(_CAMEL.sub("_", clean).lower()) if w]
+    if any(word in _SECRET_NAME_WORDS for word in words):
+        return True
+    return any(pair in _SECRET_NAME_PAIRS for pair in zip(words, words[1:]))
+
+
+def is_settings_file(file_name: str) -> bool:
+    """``.env`` (and ``.env.local``, ``prod.env``), YAML, JSON, INI, TOML, properties."""
+    name = Path(file_name).name.lower()
+    if name == ".env" or name.startswith(".env."):
+        return True
+    return name.endswith(_SETTINGS_EXTENSIONS)
+
+
+class ConfigSecretPattern(SecretPattern):
+    """A value assigned to a secret-like name in a settings file, quoted or not.
+
+    ``DB_PASSWORD=value`` (.env), ``password: value`` (YAML),
+    ``"password": "value"`` (JSON), ``api_key = value`` (INI, TOML,
+    properties). Placeholders (changeme, example, ``${VAR}``, ``%(var)s``,
+    ``<your-key>``, empty or shorter than 8 characters) and environment
+    lookups (``os.environ[...]``, ``env(...)``, ``getenv(...)``) are not
+    findings.
+    """
+
+    _SECRET_WORD = r"(?:pass|pwd|secret|token|api_?key|apikey|private_?key|access_?key|auth)"
+    _PARTS = re.compile(
+        r"""(?P<name>["']?[A-Za-z_][\w.\-]*["']?)[ \t]*(?:=|:)[ \t]*"""
+        r"""(?P<value>"[^"\n]*"|'[^'\n]*'|[^\s"',;#]+)"""
+    )
+
+    # A key starts a line (YAML, INI, .env, properties, pretty JSON) or is a
+    # quoted key after "{" or "," (one-line JSON). Text inside a string, such
+    # as an API description that says "password=...", is not a key.
+    _KEY_START = r"""(?:^[ \t]*(?:export[ \t]+)?|(?<=[{,])[ \t]*(?="))"""
+    _LEAD = re.compile(r"^\s*(?:export\s+)?")
+
+    @property
+    def pattern(self) -> str:
+        return (
+            self._KEY_START
+            + r"""(?=["']?[\w.\-]*(?i:""" + self._SECRET_WORD + r"))"
+            + self._PARTS.pattern
+        )
+
+    def applies_to(self, file_name: str) -> bool:
+        return is_settings_file(file_name)
+
+    def accepts(self, matched: str) -> bool:
+        parts = self._PARTS.match(self._LEAD.sub("", matched))
+        if parts is None:
+            return False
+        return self.is_secret(parts.group("name"), parts.group("value"))
+
+    @staticmethod
+    def is_secret(name: str, raw_value: str) -> bool:
+        if not is_secret_name(name):
+            return False
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        if not value or any(ch.isspace() for ch in value):
+            return False
+        if _ENV_LOOKUP.search(value) or "(" in value:
+            return False
+        if value.lower() in ("true", "false", "null", "none", "yes", "no") or value.isdigit():
+            return False
+        return not SecretHeuristics.is_placeholder(value)
+
+    @property
+    def secret_type(self) -> str:
+        return "Secret in Settings File"
+
+    @property
+    def severity(self) -> Severity:
+        return Severity.HIGH
+
+    @property
+    def rule_id(self) -> str:
+        return "SEC-CFG01"
+
+
 # ---------------------------------------------------------------------------
 # File extensions to scan (all common text-based source formats)
 # ---------------------------------------------------------------------------
@@ -223,13 +441,14 @@ _ALL_TEXT_EXTENSIONS: List[str] = [
     ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
     ".tf", ".hcl", ".txt",
     ".sql", ".graphql", ".vue", ".svelte", ".dart",
-    ".properties", ".gradle", ".pom",
+    ".properties", ".gradle", ".pom", ".pem",
 ]
 
 # Config files that carry credentials but have no usable extension.
 _CONFIG_FILE_NAMES: List[str] = [
     "Dockerfile", "docker-compose", "compose",
     ".htpasswd", ".npmrc", ".pypirc",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",          # SSH private keys
 ]
 
 
@@ -244,9 +463,9 @@ class SecretsDetector(BaseScanner):
     target, regardless of programming language.  Results are intended to be
     merged with language-specific scanner output.
 
-    All seven built-in patterns are applied: AWSKeyPattern, OpenAIKeyPattern,
-    GitHubTokenPattern, PasswordPattern, ConnectionStringPattern,
-    PrivateKeyPattern, and JWTPattern.
+    Provider patterns come first: when several match on one line, the
+    issue merger keeps the first of equal severity, so the most specific
+    rule is the one shown.
     """
 
     SUPPORTED_EXTENSIONS: List[str] = _ALL_TEXT_EXTENSIONS
@@ -256,10 +475,17 @@ class SecretsDetector(BaseScanner):
         AWSKeyPattern(),
         OpenAIKeyPattern(),
         GitHubTokenPattern(),
+        StripeKeyPattern(),
+        SlackTokenPattern(),
+        GoogleAPIKeyPattern(),
+        SendGridKeyPattern(),
+        TelegramBotTokenPattern(),
+        GoogleServiceAccountPattern(),
         PasswordPattern(),
         ConnectionStringPattern(),
         PrivateKeyPattern(),
         JWTPattern(),
+        ConfigSecretPattern(),
     ]
 
     @classmethod
@@ -318,8 +544,11 @@ class SecretsDetector(BaseScanner):
             return issues
 
         lines = source.splitlines()
+        file_name = Path(file_path).name
 
         for pattern_obj, compiled in self._compiled:
+            if not pattern_obj.applies_to(file_name):
+                continue
             for match in compiled.finditer(source):
                 if not pattern_obj.accepts(match.group(0)):
                     continue

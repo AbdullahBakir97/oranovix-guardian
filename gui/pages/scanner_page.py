@@ -195,34 +195,34 @@ class LogConsole(ctk.CTkFrame):
         self._txt.configure(state="disabled")
 
     def play_startup_sequence(self, widget) -> None:
-        """Schedule an animated series of boot log messages.
+        """Show the real state of the application, one line at a time.
 
-        Each line is appended with a 300 ms inter-line delay using
-        ``widget.after()`` so the animation runs on the main Tkinter
-        thread without blocking the event loop.
+        The state (version, rules, vulnerability database, AI setting,
+        monitors) is read on a worker thread, because it touches the rule
+        files, the OSV database and the credential store; the lines are
+        then added on the Tk thread with a short delay between them.
 
         Args:
             widget: Any Tkinter widget whose ``after()`` method will be
                     used to schedule the deferred calls — typically the
                     parent page frame.
-
-        Note:
-            This method must be called *after* the widget is visible and
-            the Tkinter event loop has started; otherwise ``after()`` calls
-            may be silently dropped.
         """
-        lines = [
-            ("Oranovix Guardian v1.0 initializing...",  "info",  0),
-            ("Loading security modules... ✓",            "ok",    300),
-            ("Loading AI analyzer... ✓",                 "ok",    600),
-            ("Loading language pack... ✓",               "ok",    900),
-            ("Checking license... ✓",                    "ok",    1200),
-            ("All systems ready. Welcome.",              "done",  1500),
-        ]
-        # Default-argument capture (m=msg, l=level) prevents the common
-        # late-binding closure bug with loop variables.
-        for msg, level, delay in lines:
-            widget.after(delay, lambda m=msg, l=level: self.append(m, l))
+        from gui.startup_report import StartupState, startup_lines
+        from gui.ui_thread import on_ui_thread
+
+        def show(state: StartupState) -> None:
+            for index, (text, level) in enumerate(startup_lines(state)):
+                widget.after(index * 150, lambda m=text, l=level: self._append_quietly(m, l))
+
+        deliver = on_ui_thread(widget, show)
+        threading.Thread(target=lambda: deliver(StartupState.collect()), daemon=True).start()
+
+    def _append_quietly(self, message: str, level: str) -> None:
+        """Append unless the console was destroyed meanwhile (theme or language rebuild)."""
+        try:
+            self.append(message, level)
+        except tk.TclError:
+            pass
 
 
 # ── Drop Zone ─────────────────────────────────────────────────────────────

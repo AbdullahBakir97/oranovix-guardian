@@ -29,6 +29,7 @@ $PyInstallerArgs = @(
     "--copy-metadata", "bandit",
     "--hidden-import", "keyring.backends.Windows",
     "--hidden-import", "truststore",
+    "--hidden-import", "regex",
     "--collect-data", "certifi",
     "--collect-data", "customtkinter",
     "--collect-submodules", "arabic_reshaper",

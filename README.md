@@ -20,7 +20,7 @@
 
 ## What is Oranovix Guardian?
 
-Oranovix Guardian is a **professional desktop security scanner** that detects vulnerabilities in source code across five languages. Scans run offline, with no telemetry, no account required, and no subscription. Drop a file or folder onto the scanner, click **Scan**, and get an instant risk report with actionable recommendations and optional AI-powered deep analysis. The AI analysis is the only part that sends code to an online service (Google Gemini), and only after you allow it; secrets are removed before anything is sent.
+Oranovix Guardian is a **professional desktop security scanner** that detects vulnerabilities in source code across five languages. Scans run offline, with no telemetry, no account required, and no subscription. Drop a file or folder onto the scanner, click **Scan**, and get an instant risk report with actionable recommendations and optional AI-powered deep analysis. The AI analysis is the only part that sends code to an online service (Google Gemini), and only after you allow it. Before anything is sent, string contents, long tokens and recognised secrets are replaced by placeholders. Secret findings themselves are never sent. The redaction has limits: a secret that looks like a bare variable name, secrets built from char arrays or byte lists, and free text in README files and other documentation are not recognised as secrets and may be sent as they are.
 
 ---
 

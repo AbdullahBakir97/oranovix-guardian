@@ -1,5 +1,60 @@
 # Oranovix Guardian — Development Progress
 
+## Follow-up after the audit review (main @ b33892f)
+
+Baseline: 2055 passing, 6 skipped, 1 failing. The failing test is `test_hundred_thousand_lines_in_under_five_seconds` (Log Sentinel throughput). It took 5.6 s against a 5.0 s limit on unchanged main while the machine was busy, and the whole suite took 97 s instead of the usual 50 s. It is a timing test, not a functional failure, and it was left as it is. Pyright: 12 errors in `assets/icon_generator.py` and `tests/test_window_and_icon.py` from `fix/window-and-icon`. They were fixed first (type annotations only, the generated icons are byte-identical).
+
+### Phase 1: secrets coverage (branch `feature/secrets-coverage`)
+
+Problem: the secrets detector had 7 patterns. PKCS#8 and OpenSSH private keys, Google service account files, Stripe, Slack, Google API, SendGrid and Telegram keys, OpenAI project keys, GitHub tokens other than `ghp_`, `postgres://`/`redis://`/`amqp://`/`mongodb+srv://` URLs, and unquoted passwords in settings files were all missed.
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | New rules: SEC-STRP1 Stripe `sk_live_`/`rk_live_`, SEC-SLCK1 Slack `xox[abposr]-`, SEC-GAPI1 Google API key `AIza`+35 (HIGH), SEC-SGRD1 SendGrid `SG.`22`.`43, SEC-TGBT1 Telegram `id:AA`+33, SEC-GCP01 service account `"private_key": "-----BEGIN ...`. Extended: SEC-OAI01 also `sk-proj-`/`sk-svcacct-`/`sk-admin-`; SEC-GHP01 also `gho_ ghu_ ghs_ ghr_ github_pat_`; SEC-CONN1 also `postgres`, `mariadb`, `mssql`, `sqlserver`, `mongodb+srv`, `redis`/`rediss`, `amqp`/`amqps`, and an empty user (`redis://:pass@`); a template password (`${DB_PASSWORD}`) is not a finding. Provider rules run before the generic ones, so on a shared line the specific rule is the one shown. | `scanner_engine/secrets_detector.py` |
+| 2 | SEC-PRVK1 matches `-----BEGIN [A-Z ]*PRIVATE KEY-----` (RSA, EC, DSA, OPENSSH, ENCRYPTED, PKCS#8), also inside a JSON string, CRITICAL. It needs key data after the header (base64 or `Proc-Type:`, after real or `\n`-escaped line breaks). `.pem` files and `id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519` are scanned. | same |
+| 3 | SEC-CFG01 (HIGH): in `.env*`, `.yml`/`.yaml`, `.json`, `.ini`, `.toml`, `.properties`, a value of a secret-like name (password, passwd, pwd, secret, token, api key, private key, access key, client secret, auth, passphrase) is a finding, quoted or not. The name is split into words (`DB_PASSWORD`, `apiKey`, `spring.datasource.password`), so `author` and `max_tokens` are not secret names; `_url`/`_name`/... names are not either. Not findings: the `SecretHeuristics` placeholders (changeme, example, `${VAR}`, `%(var)s`, `<your-key>`, empty, under 8 characters), `os.environ[...]`, `env(...)`, `getenv(...)`, `${{ secrets.X }}`, booleans, numbers, values with spaces or a `(`. A key must start a line or be a quoted key after `{`/`,`, so `name=value` in the prose of a JSON string is not one. | same |
+| 4 | All SEC-* rules are registered in the SECRET category, so `is_secret_finding` is true even for a merged issue. Titles in EN, DE and AR (`rule_title_SEC-*`). The PDF masker knows the Stripe, Google API, SendGrid and Telegram shapes; before, `STRIPE_KEY=sk_live_...` in a `.env` was printed in full, because neither the name nor the shape was known to it. The AI redactor skips SEC-CFG01 (its own settings-file rule covers those values) and removes the whole key body for SEC-GCP01. | `scanner_engine/categories.py`, `translations/*.json`, `reports/secret_masking.py`, `core/redactor.py` |
+| 5 | Tests: every row of the review table with the expected rule, every private key kind CRITICAL, 27 placeholder, environment-lookup and prose cases with no finding, one test that a new type (Stripe in `.env`) is masked in the PDF and makes no AI request, the redaction coverage test extended to the new rules, titles in all three languages. All key-like values are built at runtime. | `tests/test_secrets_coverage.py`, `tests/test_ai_privacy.py` |
+
+Tests: 2126 passing, 7 skipped, the same 1 timing failure (72 new; the new skip is the Django noise check, Django is not installed here). Type check: `uvx pyright`, 0 errors. Findings on `tests/corpus` are identical before and after.
+
+Noise check (the secrets detector alone, new rules): requests, urllib3 and customtkinter give 0 new findings (a test). Over the whole `venv/Lib/site-packages` (requests, urllib3, customtkinter, google-api-python-client, google-auth, cryptography, pydantic and the rest) the detector went from 11 to 9 findings:
+
+- 7 old findings are gone: SEC-PRVK1 on PEM header constants and comments in `google-auth` and three `googleapiclient` discovery documents, which have no key data after the header.
+- 5 new SEC-CONN1 findings in `pydantic/networks.py`, all docstring examples like `postgres://user:pass@localhost:5432/foobar`. That is exactly the shape this phase must report (`postgres://user:pass@`), so they stay.
+- Django was not installed and could not be checked.
+
+Known limits:
+
+- A private key header without key data after it (a truncated key, or `<key bytes>` in an example) is not reported.
+- SEC-CFG01 only runs on settings files. An unquoted value in a `.cfg`, `.conf` or Dockerfile is still only found by the older rules.
+- A password with spaces in a settings file is not reported (free text in YAML would otherwise be noise).
+- The rule titles are translated; the issue description is still English, like every other rule's.
+
+### Phase 2: review leftovers (branch `fix/review-leftovers`)
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | Custom rule ReDoS. The pattern check also refuses a group with an unbounded repeat inside (`.*`, `.+`, `\w*`, `{n,}`) that is counted `{n}`, `{n,}` or `{n,m}` with n ≥ 2: `(.*a){8}X`, `(.*,){10}X`, `(?:.*=){6}X`. `(\d{1,3}\.){3}` stays allowed. At scan time custom (non-builtin) rules and their exclusion patterns run with the `regex` module and a limit of 0.2 s per line. A rule that runs over is stopped for the rest of that file and reported once: "Custom rule X1 was stopped: too slow on a line of slow.js...", which the orchestrator adds to the scan warnings. `regex>=2024.11.6` is in `src/requirements.txt` and `--hidden-import regex` in `build.ps1`. | `scanner_engine/rule_engine.py`, `scanner_engine/orchestrator.py`, `src/requirements.txt`, `build_tools/build.ps1` |
+| 2 | eval/exec aliases. `ModuleContext` now knows the names that hold the builtins module (`import builtins as b`) and the names that hold eval/exec/compile (`e = eval`, `from builtins import eval as ev`, chains of those). Calls through `getattr(builtins, "eval")`, `b.exec`, `globals()["__builtins__"]["eval"]`, `__import__("builtins").eval` and the aliases are reported like `eval(x)`. `fn = getattr(__builtins__, "exec")` is reported where it is assigned (hiding the builtin is the finding), even if `fn` is never called in that file. `getattr(model, "eval")`, `e = model.eval` and `d["eval"]` stay quiet. | `scanner_engine/ast_analyzer.py` |
+| 3 | B605 (os.system, os.popen, getoutput...) with a constant string command is MEDIUM, with a built command still CRITICAL. B607 (partial path) on such a constant shell command keeps Bandit's own severity, as it already did for literal subprocess commands; otherwise the merged finding on that line was HIGH. | `scanner_engine/python_scanner.py` |
+| 4 | JS017 is not reported when every use of request data on the line is inside `escapeHtml`, `escape`, `encodeURIComponent`, `he.encode`, `validator.escape`, `DOMPurify.sanitize`, `xss()` or `sanitizeHtml` (also inside a template-literal field). `res.send(req.query.n)`, `res.send('<h1>' + req.query.n)` and `res.send(escapeHtml(a) + req.query.b)` stay HIGH. | `scanner_engine/output_encoding.py`, `scanner_engine/js_scanner.py` |
+| 5 | PHP005 and PHP006 (echo and print) are not reported when every superglobal is wrapped by `htmlspecialchars`, `htmlentities`, `intval`, `floatval`, `filter_var`, `json_encode` or a number cast `(int)`, `(float)`, `(bool)`; only `strip_tags` gives LOW. `echo $_GET['name'];` stays HIGH. | `scanner_engine/output_encoding.py`, `scanner_engine/php_scanner.py` |
+| 6 | README: string contents, long tokens and recognised secrets are replaced before sending; secret findings are never sent; a secret that looks like a bare variable name, secrets built from char arrays or byte lists, and free text in README files are not recognised. | `README.md` |
+| 7 | Startup console: built from `StartupState.collect()` on a worker thread: the version from `core/version.py`, the number of enabled rules, the OSV database (advisories and date, or "not downloaded yet"), the AI state (off: no API key; offline: key but online AI not allowed; online: key and allowed), Live Defense, Threat Feed and Log Sentinel on or off, and the language. The license line is gone. All lines in EN, DE and AR. | `gui/startup_report.py`, `gui/pages/scanner_page.py`, `translations/*.json` |
+| 8 | Shutdown: each monitor's `shutdown()` is wrapped on its own and a failure is logged; `super().destroy()` always runs, and closing the window always releases the single-instance lock. | `gui/app.py` |
+
+Tests: 2210 passing, 7 skipped, the same 1 timing failure (84 new, in `tests/test_review_leftovers.py`). Type check: `uvx pyright`, 0 errors. Findings on `tests/corpus` are identical to main. requests + urllib3 + customtkinter (copied, full orchestrator scan): 0 CRITICAL (was 4), HIGH 11 (unchanged), MEDIUM 6 (was 2: the four constant `os.system("defaults ...")` lines in customtkinter).
+
+The slow-rule tests run the scan in a child process that is killed after 60 s, because a regex that backtracks cannot be stopped inside the test process. The `regex` module needs no timeout for the review's own example: it finishes `(.*a){8}X` on the 260-character line in 0.04 s, where the review measured over 60 s with Python's `re`. The timeout tests therefore use `(.*a){20}X` on a 1000-character line, which is slow in both engines. `(.*a){8}X` itself is refused when it is imported.
+
+Known limits:
+
+- The static check knows nested and counted repeats. Other slow shapes (`(a|aa)+` inside a longer pattern it cannot parse, backreferences) are left to the time limit.
+- Without the `regex` module (an old install from source), custom rules run with `re` and no time limit; the static check still applies.
+- The encoder check is per line and textual: an encoder applied on an earlier line (`const safe = escapeHtml(req.query.n); res.send(safe)`) was never reported, and a value wrapped by an encoder that is not on the list is still reported.
+- The audit's 32-case corpus is not in the repository. The cases it missed are in `tests/test_detection_gaps.py` and still pass, and `tests/corpus` is unchanged; a 32/32 run needs the original corpus.
+
 ## Fixes from the full audit (main @ f1d1b43)
 
 Every item was reproduced first by a failing test, then fixed. Baseline before the fixes: 1777 passing, 5 skipped, pyright 0 errors.

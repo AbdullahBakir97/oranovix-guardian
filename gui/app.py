@@ -28,6 +28,7 @@ Version: 1.1.0
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -55,6 +56,9 @@ if TYPE_CHECKING:
     from log_sentinel.controller import SentinelState as LogSentinelState
 # gui.pages and scanner_engine are imported lazily inside methods
 # to keep startup fast (splash appears before heavy imports load)
+
+
+_log = logging.getLogger(__name__)
 
 
 class CodeGuardianApp(ctk.CTk):
@@ -506,18 +510,24 @@ class CodeGuardianApp(ctk.CTk):
         try:
             self.destroy()
         finally:
-            if self._instance is not None:
-                self._instance.release()
+            instance = getattr(self, "_instance", None)
+            if instance is not None:
+                instance.release()
                 self._instance = None
 
     def destroy(self) -> None:
-        if self._live_defense is not None:
-            self._live_defense.shutdown()
-        if self._threat_hub is not None:
-            self._threat_hub.shutdown()
-        if self._log_sentinel is not None:
-            self._log_sentinel.shutdown()
-        super().destroy()
+        """Stop every monitor, then close the window, even if a monitor fails to stop."""
+        try:
+            for name in ("_live_defense", "_threat_hub", "_log_sentinel"):
+                monitor = getattr(self, name, None)
+                if monitor is None:
+                    continue
+                try:
+                    monitor.shutdown()
+                except Exception:
+                    _log.exception("%s did not shut down cleanly", name.strip("_"))
+        finally:
+            super().destroy()
 
     def _navigate(self, page_id: str) -> None:
         """Show the requested page and hide all others.

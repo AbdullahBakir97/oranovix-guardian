@@ -20,7 +20,7 @@ import io
 import struct
 from collections import deque
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -55,7 +55,7 @@ def remove_outside_background(img: Image.Image) -> Image.Image:
     """
     img = img.convert("RGBA")
     width, height = img.size
-    pixels = img.load()
+    pixels: Any = img.load()
 
     def is_background(x: int, y: int) -> bool:
         r, g, b, a = pixels[x, y]
@@ -85,7 +85,7 @@ def remove_outside_background(img: Image.Image) -> Image.Image:
             queue.append((x, y + 1))
 
     result = img.copy()
-    out = result.load()
+    out: Any = result.load()
     for y in range(height):
         row = y * width
         for x in range(width):

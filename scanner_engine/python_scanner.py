@@ -63,6 +63,14 @@ _ESCALATE_TO_CRITICAL: set[str] = {
 # eval("1 + 1") is MEDIUM, like the AST rule.
 _CRITICAL_UNLESS_CONSTANT: set[str] = {"B102", "B307"}
 
+# Shell commands (B605: os.system, os.popen...) are CRITICAL only when the
+# command is built at runtime; a fixed string such as
+# os.system("defaults write -g ...") cannot be changed by an attacker: MEDIUM.
+_SHELL_UNLESS_CONSTANT: set[str] = {"B605"}
+_SHELL_FUNCTIONS: frozenset = frozenset({
+    "system", "popen", "popen2", "popen3", "popen4", "getoutput", "getstatusoutput",
+})
+
 # Hardcoded password findings are promoted only when Bandit is not unsure
 # and the name and value look like a real secret (SecretHeuristics).
 _SECRET_TESTS: set[str] = {"B105", "B106", "B107"}
@@ -192,6 +200,11 @@ class BanditSeverityPolicy:
             if call is not None and self._constant_code(call):
                 return Severity.MEDIUM
             return Severity.CRITICAL
+        if test_id in _SHELL_UNLESS_CONSTANT:
+            call = self._call_at(finding, lambda name: name in _SHELL_FUNCTIONS)
+            if call is not None and self._constant_code(call):
+                return Severity.MEDIUM
+            return Severity.CRITICAL
         if test_id in _ESCALATE_TO_CRITICAL:
             return Severity.CRITICAL
         if test_id in _SECRET_TESTS:
@@ -201,7 +214,7 @@ class BanditSeverityPolicy:
         if test_id in _COMMAND_TESTS:
             if unsure:
                 return own
-            call = self._call_at(finding, lambda name: name in _SUBPROCESS_FUNCTIONS)
+            call = self._call_at(finding, lambda name: name in _SUBPROCESS_FUNCTIONS or name in _SHELL_FUNCTIONS)
             if call is not None and self._literal_command(call):
                 return own
             return Severity.HIGH
