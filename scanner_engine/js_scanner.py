@@ -24,11 +24,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from .categories import category_for_rule
 from .base import BaseScanner, Issue, Language, ScanResult, Severity
 from .vulnerability_db import VulnerabilityDatabase
+from .output_encoding import all_wrapped
 
 
 # Type alias for a compiled rule tuple:
@@ -133,6 +134,10 @@ class JSScanner(BaseScanner):
 
             for pattern, title, severity, vuln_key, rule_id in self._rules:
                 if re.search(pattern, line, re.IGNORECASE):
+                    adjusted = self._output_severity(rule_id, line, severity)
+                    if adjusted is None:
+                        continue            # encoded output: not this rule
+                    severity = adjusted
                     issue = Issue(
                         rule_id=rule_id,
                         category=category_for_rule(rule_id),
@@ -151,6 +156,20 @@ class JSScanner(BaseScanner):
                     break  # one issue per line max – first matching rule wins
 
         return issues
+
+    # Request data in the response is safe when an encoder wraps every use.
+    _REQUEST_VALUE = re.compile(r"\breq(?:uest)?\s*\.\s*(?:query|body|params|cookies|headers)\b", re.IGNORECASE)
+    _ENCODERS = frozenset({
+        "escapeHtml", "escape", "encodeURIComponent", "he.encode", "validator.escape",
+        "DOMPurify.sanitize", "xss", "sanitizeHtml",
+    })
+
+    @classmethod
+    def _output_severity(cls, rule_id: str, line: str, severity: Severity) -> Optional[Severity]:
+        """``None`` when JS017's request data is encoded on its way out."""
+        if rule_id == "JS017" and all_wrapped(line, cls._REQUEST_VALUE, cls._ENCODERS):
+            return None
+        return severity
 
     # ------------------------------------------------------------------
     # Rule definitions
