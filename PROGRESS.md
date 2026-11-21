@@ -31,6 +31,30 @@ Known limits:
 - A password with spaces in a settings file is not reported (free text in YAML would otherwise be noise).
 - The rule titles are translated; the issue description is still English, like every other rule's.
 
+### Phase 2: review leftovers (branch `fix/review-leftovers`)
+
+| Step | Change | Main files |
+|------|--------|-----------|
+| 1 | Custom rule ReDoS. The pattern check also refuses a group with an unbounded repeat inside (`.*`, `.+`, `\w*`, `{n,}`) that is counted `{n}`, `{n,}` or `{n,m}` with n ≥ 2: `(.*a){8}X`, `(.*,){10}X`, `(?:.*=){6}X`. `(\d{1,3}\.){3}` stays allowed. At scan time custom (non-builtin) rules and their exclusion patterns run with the `regex` module and a limit of 0.2 s per line. A rule that runs over is stopped for the rest of that file and reported once: "Custom rule X1 was stopped: too slow on a line of slow.js...", which the orchestrator adds to the scan warnings. `regex>=2024.11.6` is in `src/requirements.txt` and `--hidden-import regex` in `build.ps1`. | `scanner_engine/rule_engine.py`, `scanner_engine/orchestrator.py`, `src/requirements.txt`, `build_tools/build.ps1` |
+| 2 | eval/exec aliases. `ModuleContext` now knows the names that hold the builtins module (`import builtins as b`) and the names that hold eval/exec/compile (`e = eval`, `from builtins import eval as ev`, chains of those). Calls through `getattr(builtins, "eval")`, `b.exec`, `globals()["__builtins__"]["eval"]`, `__import__("builtins").eval` and the aliases are reported like `eval(x)`. `fn = getattr(__builtins__, "exec")` is reported where it is assigned (hiding the builtin is the finding), even if `fn` is never called in that file. `getattr(model, "eval")`, `e = model.eval` and `d["eval"]` stay quiet. | `scanner_engine/ast_analyzer.py` |
+| 3 | B605 (os.system, os.popen, getoutput...) with a constant string command is MEDIUM, with a built command still CRITICAL. B607 (partial path) on such a constant shell command keeps Bandit's own severity, as it already did for literal subprocess commands; otherwise the merged finding on that line was HIGH. | `scanner_engine/python_scanner.py` |
+| 4 | JS017 is not reported when every use of request data on the line is inside `escapeHtml`, `escape`, `encodeURIComponent`, `he.encode`, `validator.escape`, `DOMPurify.sanitize`, `xss()` or `sanitizeHtml` (also inside a template-literal field). `res.send(req.query.n)`, `res.send('<h1>' + req.query.n)` and `res.send(escapeHtml(a) + req.query.b)` stay HIGH. | `scanner_engine/output_encoding.py`, `scanner_engine/js_scanner.py` |
+| 5 | PHP005 and PHP006 (echo and print) are not reported when every superglobal is wrapped by `htmlspecialchars`, `htmlentities`, `intval`, `floatval`, `filter_var`, `json_encode` or a number cast `(int)`, `(float)`, `(bool)`; only `strip_tags` gives LOW. `echo $_GET['name'];` stays HIGH. | `scanner_engine/output_encoding.py`, `scanner_engine/php_scanner.py` |
+| 6 | README: string contents, long tokens and recognised secrets are replaced before sending; secret findings are never sent; a secret that looks like a bare variable name, secrets built from char arrays or byte lists, and free text in README files are not recognised. | `README.md` |
+| 7 | Startup console: built from `StartupState.collect()` on a worker thread: the version from `core/version.py`, the number of enabled rules, the OSV database (advisories and date, or "not downloaded yet"), the AI state (off: no API key; offline: key but online AI not allowed; online: key and allowed), Live Defense, Threat Feed and Log Sentinel on or off, and the language. The license line is gone. All lines in EN, DE and AR. | `gui/startup_report.py`, `gui/pages/scanner_page.py`, `translations/*.json` |
+| 8 | Shutdown: each monitor's `shutdown()` is wrapped on its own and a failure is logged; `super().destroy()` always runs, and closing the window always releases the single-instance lock. | `gui/app.py` |
+
+Tests: 2210 passing, 7 skipped, the same 1 timing failure (84 new, in `tests/test_review_leftovers.py`). Type check: `uvx pyright`, 0 errors. Findings on `tests/corpus` are identical to main. requests + urllib3 + customtkinter (copied, full orchestrator scan): 0 CRITICAL (was 4), HIGH 11 (unchanged), MEDIUM 6 (was 2: the four constant `os.system("defaults ...")` lines in customtkinter).
+
+The slow-rule tests run the scan in a child process that is killed after 60 s, because a regex that backtracks cannot be stopped inside the test process. The `regex` module needs no timeout for the review's own example: it finishes `(.*a){8}X` on the 260-character line in 0.04 s, where the review measured over 60 s with Python's `re`. The timeout tests therefore use `(.*a){20}X` on a 1000-character line, which is slow in both engines. `(.*a){8}X` itself is refused when it is imported.
+
+Known limits:
+
+- The static check knows nested and counted repeats. Other slow shapes (`(a|aa)+` inside a longer pattern it cannot parse, backreferences) are left to the time limit.
+- Without the `regex` module (an old install from source), custom rules run with `re` and no time limit; the static check still applies.
+- The encoder check is per line and textual: an encoder applied on an earlier line (`const safe = escapeHtml(req.query.n); res.send(safe)`) was never reported, and a value wrapped by an encoder that is not on the list is still reported.
+- The audit's 32-case corpus is not in the repository. The cases it missed are in `tests/test_detection_gaps.py` and still pass, and `tests/corpus` is unchanged; a 32/32 run needs the original corpus.
+
 ## Fixes from the full audit (main @ f1d1b43)
 
 Every item was reproduced first by a failing test, then fixed. Baseline before the fixes: 1777 passing, 5 skipped, pyright 0 errors.
