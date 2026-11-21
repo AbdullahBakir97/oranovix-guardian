@@ -9,7 +9,7 @@ import logging
 import shutil
 import time
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Dict, List
 
 import pytest
 
@@ -76,8 +76,10 @@ from pathlib import Path
 from scanner_engine.base import Language
 from scanner_engine.rule_engine import Rule, RuleEngine
 tmp = Path(sys.argv[2])
+# Slow even for the regex module (which defuses (.*a){8}X on its own).
+SLOW = r"(.*a){20}X"
 engine = RuleEngine(str(tmp / "rules"))
-engine.rules.append(Rule(id="X1", name="slow", description="", pattern=r"(.*a){8}X",
+engine.rules.append(Rule(id="X1", name="slow", description="", pattern=SLOW,
                          severity="LOW", language="ALL", is_builtin=False))
 out = {}
 started = time.perf_counter()
@@ -91,9 +93,9 @@ if sys.argv[3] == "orchestrator":
     from scanner_engine.orchestrator import ScanOrchestrator
     project = tmp / "project"
     project.mkdir()
-    (project / "slow.js").write_text("a" * 60 + "b" * 200 + "\n", encoding="utf-8")
+    (project / "slow.js").write_text("a" * 200 + "b" * 800 + "\n", encoding="utf-8")
     engine2 = RuleEngine(str(tmp / "rules2"))
-    engine2.rules.append(Rule(id="X1", name="slow", description="", pattern=r"(.*a){8}X",
+    engine2.rules.append(Rule(id="X1", name="slow", description="", pattern=SLOW,
                               severity="LOW", language="ALL", is_builtin=False))
     out["engine_warnings"] = ScanOrchestrator(rule_engine=engine2).scan(str(project)).engine_warnings
 print(json.dumps(out))
@@ -104,8 +106,8 @@ def _run_slow_rule(tmp_path: Path, mode: str = "engine") -> dict:
     import os
     import subprocess
     import sys
-    (tmp_path / "slow.py").write_text("a" * 60 + "b" * 200 + "\n" + "a" * 8 + "X\n", encoding="utf-8")
-    (tmp_path / "fine.py").write_text("a" * 8 + "X\n", encoding="utf-8")
+    (tmp_path / "slow.py").write_text("a" * 200 + "b" * 800 + "\n" + "a" * 20 + "X\n", encoding="utf-8")
+    (tmp_path / "fine.py").write_text("a" * 20 + "X\n", encoding="utf-8")
     try:
         done = subprocess.run(
             [sys.executable, "-c", _CHILD, str(ROOT), str(tmp_path), mode],
@@ -232,6 +234,20 @@ def test_b605_with_a_built_command_stays_critical(tmp_path: Path, code: str) -> 
     assert b605(tmp_path, code) is Severity.CRITICAL
 
 
+def test_b607_on_a_constant_shell_command_is_not_promoted(tmp_path: Path) -> None:
+    """os.system("defaults ...") is also B607 (partial path); promoted to HIGH it
+    would outrank the MEDIUM B605 when the two are merged on that line."""
+    path = tmp_path / "tool.py"
+    code = 'os.system("defaults write -g NSRequiresAquaSystemAppearance -bool No")'
+    path.write_text("import os\n" + code + "\n", encoding="utf-8")
+    finding = BanditFinding(
+        test_id="B607", test_name="start_process_with_partial_path", severity="LOW", confidence="HIGH",
+        line_number=2, file_path=str(path), text="Starting a process with a partial executable path",
+        code=code,
+    )
+    assert BanditSeverityPolicy().severity(finding) is Severity.LOW
+
+
 def test_customtkinter_window_code_has_no_critical_finding(tmp_path: Path) -> None:
     import importlib.util
     from scanner_engine.python_scanner import PythonScanner
@@ -346,7 +362,7 @@ def test_readme_states_what_redaction_does_not_catch() -> None:
 
 def _state(**changes: Any) -> Any:
     from gui.startup_report import StartupState
-    values = dict(
+    values: Dict[str, Any] = dict(
         version="1.1.0", rules=12, osv_updated=None, osv_advisories=0,
         ai="off", live_defense=False, threat_feed=False, log_sentinel=False, language="English",
     )
@@ -358,7 +374,7 @@ def _lines(state: Any, lang: str = "en") -> List[str]:
     from core.language_manager import LanguageManager
     from gui.startup_report import startup_lines
     manager = LanguageManager()
-    before = manager.current_language
+    before = manager.current_lang
     manager.set_language(lang)
     try:
         return [text for text, _level in startup_lines(state)]
