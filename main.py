@@ -18,6 +18,14 @@ from __future__ import annotations
 import sys
 import os
 
+if sys.platform == "win32":
+    # Own taskbar identity: our icon, not Python's, when run from source.
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Oranovix.Guardian")
+    except Exception:
+        pass
+
 # Ensure the project root directory is first on sys.path so that all
 # internal packages (gui, core, scanner_engine, …) can be imported with
 # simple top-level names regardless of the current working directory.
@@ -45,7 +53,7 @@ def main() -> None:
         return
     try:
         AppPaths.migrate_legacy()
-        app = CodeGuardianApp()
+        app = CodeGuardianApp(instance=instance)
         app.mainloop()
     finally:
         instance.release()

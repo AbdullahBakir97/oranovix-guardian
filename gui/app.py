@@ -3,11 +3,11 @@ Root application window for Oranovix Guardian.
 
 This module defines :class:`CodeGuardianApp`, the single
 :class:`customtkinter.CTk` root window that owns the entire widget tree.
-It follows a splash-first startup pattern: the OS title bar is suppressed
-with ``overrideredirect(True)``, a :class:`~gui.splash_screen.SplashScreen`
-is shown while heavy page modules are pre-loaded in a background thread,
-and then the full UI (custom title bar, sidebar, content area, status bar)
-is constructed and the window is revealed.
+It follows a splash-first startup pattern: the main window stays hidden
+while a :class:`~gui.splash_screen.SplashScreen` is shown and heavy page
+modules are pre-loaded in a background thread, then the full UI (header,
+sidebar, content area, status bar) is constructed and the window is
+revealed.
 
 Navigation is sidebar-driven: each logical page is a :class:`ctk.CTkFrame`
 sub-class that lives permanently inside the content area and is simply
@@ -18,11 +18,11 @@ implemented in :class:`~gui.theme_manager.ThemeManager` and
 :class:`~core.language_manager.LanguageManager`.  Any change triggers a
 full UI rebuild so that every widget reflects the new palette or locale.
 
-Custom title bar notes (``overrideredirect=True``):
-  - Window dragging is implemented via mouse-event bindings on the title bar.
-  - Minimize / Maximise / Close buttons are rendered manually.
-  - The Windows taskbar entry is restored via ``ctypes`` after the window
-    is shown, because ``overrideredirect`` normally removes it.
+Window frame: the main window keeps the native frame, so the taskbar
+button, minimize/maximize/close, Snap layouts, Win+Arrow keys and edge
+resizing are the system's own. On Windows the frame is colored to match
+the theme (:mod:`gui.window_frame`). Closing the window runs
+:meth:`CodeGuardianApp._on_close`.
 
 Version: 1.1.0
 """
@@ -32,7 +32,7 @@ import os
 import sys
 import threading
 import tkinter as tk
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import customtkinter as ctk
 
@@ -46,6 +46,7 @@ from gui.splash_screen     import SplashScreen
 from gui.title_bar         import CustomTitleBar
 from gui.sidebar           import Sidebar
 from gui.status_bar        import StatusBar
+from gui.window_frame      import apply_frame_theme
 
 if TYPE_CHECKING:
     from live_defense.controller import LiveDefenseController, LiveDefenseState
@@ -75,7 +76,11 @@ class CodeGuardianApp(ctk.CTk):
     APP_WIDTH  = 1140
     APP_HEIGHT = 740
 
-    def __init__(self) -> None:
+    # The frame color is set by gui.window_frame; CTk's own version hides
+    # and re-shows the window to apply it.
+    _deactivate_windows_window_header_manipulation = True
+
+    def __init__(self, instance: Optional[Any] = None) -> None:
         """Initialise the application.
 
         The constructor follows a strict ordering requirement:
@@ -83,6 +88,10 @@ class CodeGuardianApp(ctk.CTk):
         must be called *before* ``super().__init__()`` so that
         CustomTkinter creates all internal widgets with the correct
         palette from the start.
+
+        Args:
+            instance: The single-instance guard of this process, released
+                when the window is closed.
         """
         # Apply CTk appearance BEFORE super().__init__() so that the
         # underlying Tk engine initialises with the correct color scheme.
@@ -104,6 +113,8 @@ class CodeGuardianApp(ctk.CTk):
         self._threat_hub:    Optional[ThreatIntelHub] = None
         self._log_sentinel:  Optional[LogSentinelController] = None
         self._feed_report_shown: Optional[object] = None
+        self._instance = instance
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Register observers so theme/language changes trigger a rebuild.
         # These registrations persist across UI rebuilds because the
@@ -114,7 +125,9 @@ class CodeGuardianApp(ctk.CTk):
         # Hide the main window before the splash is shown so the user
         # only ever sees the splash during startup.
         self.withdraw()
-        self._apply_overrideredirect()
+        self._setup_geometry()
+        # Default icon: the splash, every dialog and Toplevel inherit it.
+        self._set_icon()
 
         # Pre-import heavy page modules in background during splash so
         # that _build_pages() runs quickly after the splash finishes.
@@ -141,17 +154,6 @@ class CodeGuardianApp(ctk.CTk):
     # Window setup
     # ------------------------------------------------------------------
 
-    def _apply_overrideredirect(self) -> None:
-        """Remove the OS-native title bar and set the initial geometry.
-
-        ``overrideredirect(True)`` strips the platform's window
-        decorations so the app can render its own custom title bar.  The
-        taskbar entry is restored separately in
-        :meth:`_restore_taskbar_entry` after the window becomes visible.
-        """
-        self.overrideredirect(True)
-        self._setup_geometry()
-
     def _setup_geometry(self) -> None:
         """Set the window size and centre it on the primary monitor.
 
@@ -171,47 +173,8 @@ class CodeGuardianApp(ctk.CTk):
         y  = (sh - self.APP_HEIGHT) // 2
         self.geometry(f"{self.APP_WIDTH}x{self.APP_HEIGHT}+{x}+{y}")
 
-    def _restore_taskbar_entry(self) -> None:
-        """Ensure the custom-framed window appears in the Windows taskbar.
-
-        ``overrideredirect(True)`` causes Windows to treat the window as a
-        tool window (``WS_EX_TOOLWINDOW``), which hides it from the
-        taskbar.  This method uses the Win32 API to strip that style flag
-        and add ``WS_EX_APPWINDOW`` so the entry reappears.
-
-        The call is a no-op on non-Windows platforms and silently ignores
-        any ``ctypes`` errors so as not to crash the application on
-        unusual Windows configurations.
-        """
-        if sys.platform != "win32":
-            return
-        try:
-            import ctypes
-            GWL_EXSTYLE      = -20           # index for extended window style
-            WS_EX_APPWINDOW  = 0x00040000   # forces taskbar button
-            WS_EX_TOOLWINDOW = 0x00000080   # hides taskbar button (applied by overrideredirect)
-            SWP_NOMOVE       = 0x0002
-            SWP_NOSIZE       = 0x0001
-            SWP_NOZORDER     = 0x0004
-            SWP_FRAMECHANGED = 0x0020       # instructs the OS to re-read the style
-            # Use the tk window id directly — GetParent can return 0 on Win11
-            hwnd = self.winfo_id()
-            if not hwnd:
-                return
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            # Remove the tool-window bit and set the app-window bit.
-            new   = (style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW
-            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new)
-            # Apply style change without hiding the window
-            ctypes.windll.user32.SetWindowPos(
-                hwnd, 0, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
-            )
-        except Exception:
-            pass
-
     def _set_icon(self) -> None:
-        """Set the window icon from ``assets/icon.ico``.
+        """Set ``assets/icon.ico`` as the default icon of every window.
 
         The call is wrapped in a try/except because ``iconbitmap`` raises
         on some platforms (e.g. Linux without the required Tk extension)
@@ -221,7 +184,7 @@ class CodeGuardianApp(ctk.CTk):
         ico = get_asset_path("icon.ico")
         if os.path.exists(ico):
             try:
-                self.iconbitmap(ico)
+                self.iconbitmap(default=ico)
             except Exception:
                 pass
 
@@ -230,18 +193,22 @@ class CodeGuardianApp(ctk.CTk):
 
         Called by :class:`~gui.splash_screen.SplashScreen` via the
         ``on_done`` callback once the splash animation has finished.
-        The taskbar restoration is deferred by 100 ms to ensure the
-        window handle is fully initialised before the Win32 call.
         """
         self._build_ui()
-        self._set_icon()
         self.deiconify()
-        # Small delay before patching the taskbar entry; the HWND must be
-        # fully visible for SetWindowLongW to take effect reliably.
-        self.after(100, self._restore_taskbar_entry)
+        self._apply_frame_theme()
         self.after(300, self._watch_storage_problems)
         self.after(400, self._offer_resumes)
         self.after(900, self._start_threat_feed)
+
+    def _apply_frame_theme(self) -> None:
+        """Color the native frame to match the current theme (Windows only)."""
+        tm = ThemeManager()
+        try:
+            self.update_idletasks()
+        except tk.TclError:
+            return
+        apply_frame_theme(self, dark=tm.is_dark, caption=tm.c("bg2"), text=tm.c("text"))
 
     def _watch_storage_problems(self) -> None:
         """A write that fails (settings, history, rules) is shown once, not swallowed."""
@@ -283,7 +250,7 @@ class CodeGuardianApp(ctk.CTk):
         lm = LanguageManager()
         self.configure(fg_color=tm.c("bg"))
 
-        # Custom title bar (replaces the OS window chrome removed by overrideredirect)
+        # Header under the native title bar: logo, name, language, theme
         self._title_bar = CustomTitleBar(
             self,
             window=self,
@@ -534,6 +501,15 @@ class CodeGuardianApp(ctk.CTk):
         self._navigate("scanner")
         self._pages["scanner"].scan_path(path)
 
+    def _on_close(self) -> None:
+        """The window's close button: stop the monitors, release the lock, close."""
+        try:
+            self.destroy()
+        finally:
+            if self._instance is not None:
+                self._instance.release()
+                self._instance = None
+
     def destroy(self) -> None:
         if self._live_defense is not None:
             self._live_defense.shutdown()
@@ -617,6 +593,7 @@ class CodeGuardianApp(ctk.CTk):
         originates from a non-GUI event.
         """
         self.after(10, self._rebuild_ui)
+        self.after(10, self._apply_frame_theme)
 
     def _rebuild_ui(self) -> None:
         """Destroy all widgets and reconstruct the UI with the new theme/language.

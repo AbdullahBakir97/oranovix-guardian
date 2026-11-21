@@ -25,16 +25,6 @@ ASSETS = ROOT / "assets"
 # Helpers
 # ----------------------------------------------------------------------
 
-def _tk_root() -> Any:
-    import customtkinter as ctk
-    try:
-        root = ctk.CTk()
-    except Exception as exc:  # no display
-        pytest.skip(f"no display: {exc}")
-    root.withdraw()
-    return root
-
-
 def _ico_entries(path: Path) -> List[Tuple[int, int, bytes]]:
     data = path.read_bytes()
     reserved, kind, count = struct.unpack_from("<HHH", data, 0)
@@ -86,49 +76,47 @@ class _FakeController:
         self.shut_down += 1
 
 
-@pytest.fixture
-def app(monkeypatch: pytest.MonkeyPatch) -> Any:
+@pytest.fixture(scope="module")
+def app() -> Any:
+    """One main window for the module.
+
+    Creating Tk interpreters again and again in one process sometimes
+    fails to load Tk's own scripts (Microsoft Store Python), so the GUI
+    tests share this window; the close test runs last and closes it.
+    """
     import gui.app as app_module
 
     class NoSplash:
         def __init__(self, parent: Any, on_done: Any) -> None:
             pass
 
-    monkeypatch.setattr(app_module, "SplashScreen", NoSplash)
-    _tk_root().destroy()  # skip early when there is no display
-    instance = _FakeInstance()
-    window = app_module.CodeGuardianApp(instance=instance)
-    window._test_instance = instance
-    yield window
-    try:
-        window.destroy()
-    except Exception:
-        pass
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(app_module, "SplashScreen", NoSplash)
+        patch.setattr(app_module.CodeGuardianApp, "_preload_modules", staticmethod(lambda: None))
+        instance = _FakeInstance()
+        try:
+            window = app_module.CodeGuardianApp(instance=instance)
+        except Exception as exc:  # no display
+            pytest.skip(f"no display: {exc}")
+        window._test_instance = instance
+        yield window
+        try:
+            window.destroy()
+        except Exception:
+            pass
 
 
 def test_the_main_window_has_the_native_frame(app: Any) -> None:
     assert not app.overrideredirect()
 
 
-def test_window_close_runs_the_clean_shutdown(app: Any) -> None:
-    command = app.tk.call("wm", "protocol", app._w, "WM_DELETE_WINDOW")
-    assert str(command).endswith("_on_close")
-
-    live, hub, sentinel = _FakeController(), _FakeController(), _FakeController()
-    app._live_defense, app._threat_hub, app._log_sentinel = live, hub, sentinel
-    instance = app._test_instance
-    app._on_close()
-    assert (live.shut_down, hub.shut_down, sentinel.shut_down) == (1, 1, 1)
-    assert instance.released == 1
-
-
-def test_the_title_bar_has_no_window_buttons() -> None:
+def test_the_title_bar_has_no_window_buttons(app: Any) -> None:
     import customtkinter as ctk
     from gui.title_bar import CustomTitleBar
 
-    root = _tk_root()
+    bar = None
     try:
-        bar = CustomTitleBar(root, window=root, on_theme_toggle=lambda: None, on_lang_change=lambda _: None)
+        bar = CustomTitleBar(app, window=app, on_theme_toggle=lambda: None, on_lang_change=lambda _: None)
         texts = []
         stack = list(bar.winfo_children())
         while stack:
@@ -141,7 +129,20 @@ def test_the_title_bar_has_no_window_buttons() -> None:
         for name in ("_minimize", "_maximize", "_close", "_on_drag"):
             assert not hasattr(bar, name)
     finally:
-        root.destroy()
+        if bar is not None:
+            bar.destroy()
+
+
+def test_window_close_runs_the_clean_shutdown(app: Any) -> None:
+    command = app.tk.call("wm", "protocol", app._w, "WM_DELETE_WINDOW")
+    assert str(command).endswith("_on_close")
+
+    live, hub, sentinel = _FakeController(), _FakeController(), _FakeController()
+    app._live_defense, app._threat_hub, app._log_sentinel = live, hub, sentinel
+    instance = app._test_instance
+    app._on_close()
+    assert (live.shut_down, hub.shut_down, sentinel.shut_down) == (1, 1, 1)
+    assert instance.released == 1
 
 
 def test_dwm_helper_is_a_no_op_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
