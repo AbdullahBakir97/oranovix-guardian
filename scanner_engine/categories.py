@@ -77,6 +77,12 @@ RULE_CATEGORIES: dict[str, IssueCategory] = {
     "B310": _C.SSRF,
     # Python regex checks
     "SEC001": _C.SECRET,
+    # Secrets detector (all file types)
+    "SEC-AWS01": _C.SECRET, "SEC-OAI01": _C.SECRET, "SEC-GHP01": _C.SECRET,
+    "SEC-STRP1": _C.SECRET, "SEC-SLCK1": _C.SECRET, "SEC-GAPI1": _C.SECRET,
+    "SEC-SGRD1": _C.SECRET, "SEC-TGBT1": _C.SECRET, "SEC-GCP01": _C.SECRET,
+    "SEC-PWD01": _C.SECRET, "SEC-CONN1": _C.SECRET, "SEC-PRVK1": _C.SECRET,
+    "SEC-JWT01": _C.SECRET, "SEC-CFG01": _C.SECRET,
     # JavaScript / TypeScript
     "JS001": _C.CODE_EXEC, "JS002": _C.CODE_EXEC, "JS003": _C.CODE_EXEC,
     "JS004": _C.SECRET,

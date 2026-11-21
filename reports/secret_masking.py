@@ -24,7 +24,11 @@ _TOKENS = re.compile(
     r"|\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{20,}\b"        # GitHub tokens
     r"|\bgithub_pat_[A-Za-z0-9_]{20,}\b"
     r"|\bsk-[A-Za-z0-9_-]{20,}\b"                           # OpenAI style keys
-    r"|\bxox[abprs]-[A-Za-z0-9-]{10,}\b"                    # Slack
+    r"|\bxox[abposr]-[A-Za-z0-9-]{10,}\b"                   # Slack
+    r"|\b[sr]k_live_[0-9A-Za-z]{16,}"                       # Stripe live / restricted
+    r"|\bAIza[0-9A-Za-z_-]{30,}"                            # Google API key
+    r"|\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"        # SendGrid
+    r"|\b[0-9]{8,10}:AA[0-9A-Za-z_-]{30,}"                  # Telegram bot token
     r"|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?"   # JWT
 )
 # scheme://user:password@host

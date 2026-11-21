@@ -446,7 +446,9 @@ class Redactor:
     def _build_rules(cls) -> List[Tuple[Pattern[str], _Replace]]:
         from scanner_engine.ast_analyzer import SECRET_VARIABLE_NAMES
         from scanner_engine.secrets_detector import (
+            ConfigSecretPattern,
             ConnectionStringPattern,
+            GoogleServiceAccountPattern,
             JWTPattern,
             PasswordPattern,
             PrivateKeyPattern,
@@ -455,13 +457,17 @@ class Redactor:
 
         rules: List[Tuple[Pattern[str], _Replace]] = []
         for secret in SecretsDetector.patterns():
+            if isinstance(secret, ConfigSecretPattern):
+                # Settings-file values: the scanner limits this one to settings
+                # files; here the unquoted-value rule below covers it.
+                continue
             source = secret.pattern
             replace: _Replace = cls._replace_all
             if isinstance(secret, ConnectionStringPattern):
                 replace = cls._replace_connection_password
             elif isinstance(secret, PasswordPattern):
                 replace = cls._replace_last_literal
-            elif isinstance(secret, PrivateKeyPattern):
+            elif isinstance(secret, (PrivateKeyPattern, GoogleServiceAccountPattern)):
                 # The scanner only needs the BEGIN line; the key body follows it.
                 source += r"(?s:.*?)(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
             elif isinstance(secret, JWTPattern):

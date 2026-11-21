@@ -147,6 +147,14 @@ NON_FINDINGS = {
     "url_template": ("settings.py", 'DB = "postgres://app:${DB_PASSWORD}@db/shop"\n'),
     "url_without_password": ("settings.py", 'DB = "postgres://db.internal:5432/shop"\n'),
     "python_unquoted_is_code": ("app.py", "password = load_password_from_vault(name)\n"),
+    # A PEM header without key data is a constant or a comment in a crypto library.
+    "pem_marker_constant": ("crypt.py", f'_PKCS8_MARKER = ("{DASHES}BEGIN PRIVATE KEY{DASHES}", "x")\n'),
+    "pem_marker_comment": ("tls.py", f'# "{DASHES}BEGIN EC PRIVATE KEY{DASHES}...",\n'),
+    "service_account_template": ("creds.json", json.dumps(
+        {"private_key": f"{DASHES}BEGIN EC PRIVATE KEY{DASHES}\n<key bytes>\n{DASHES}END EC PRIVATE KEY{DASHES}\n"})),
+    # "name=value" inside a JSON string is prose, not a key.
+    "json_prose": ("api.json", json.dumps({"description": "filter on oAuthClientId=clientIdValue123, "
+                                                         "or set access_token=ACCESS_TOKEN_VALUE first"})),
 }
 
 
